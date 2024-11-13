@@ -1,486 +1,402 @@
-﻿import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, AlertCircle, Loader2, Network, ExternalLink } from 'lucide-react';
-import { checkITSAvailability, getITSPrices, checkITSOptimization } from '../../../api/itsApi';
+﻿import React, { useState } from 'react';
+import { Trash2, Network, AlertCircle, MapPin, Plus, X, PoundSterling } from 'lucide-react';
 import AddressLookup from '../components/AddressLookup';
 
 const NetworkForm = ({ formData, setFormData }) => {
-    const [loading, setLoading] = useState(false);
-    const [itsAvailability, setITSAvailability] = useState(null);
-    const [itsOptimizations, setITSOptimizations] = useState(null);
-    const [validationErrors, setValidationErrors] = useState({});
-    const [showManualEntry, setShowManualEntry] = useState(false);
+    const [showConnectionForm, setShowConnectionForm] = useState(false);
+    const [currentSiteId, setCurrentSiteId] = useState(null);
+    const [newConnection, setNewConnection] = useState({
+        type: '',
+        speed: '',
+        cost: '',
+        backup: false,
+        term: '36'
+    });
 
-    const connectionTypes = [
-        { value: 'ethernet', label: 'Ethernet' },
-        { value: 'dark_fibre', label: 'Dark Fibre' },
-        { value: 'leased_line', label: 'Leased Line' },
-        { value: 'mpls', label: 'MPLS' },
-        { value: 'wavelength', label: 'Wavelength' },
-        { value: 'broadband', label: 'Broadband' }
-    ];
-
-    const speedOptions = {
-        ethernet: ['100Mbps', '1Gbps', '10Gbps'],
-        dark_fibre: ['1Gbps', '10Gbps', '100Gbps'],
-        leased_line: ['10Mbps', '100Mbps', '1Gbps'],
-        mpls: ['10Mbps', '100Mbps', '1Gbps'],
-        wavelength: ['1Gbps', '10Gbps', '100Gbps'],
-        broadband: ['Up to 80Mbps', 'Up to 330Mbps', 'Up to 1Gbps']
+    const formatAddress = (address) => {
+        if (!address) return '';
+        const parts = [];
+        if (address.building) parts.push(address.building);
+        if (address.street) parts.push(address.street);
+        if (address.city) parts.push(address.city);
+        if (address.postcode) parts.push(address.postcode);
+        return parts.join(', ');
     };
 
-    useEffect(() => {
-        const checkAvailability = async () => {
-            if (formData.sites[0].address?.postcode && formData.sites[0].address?.building) {
-                setLoading(true);
-                try {
-                    const { postcode, building } = formData.sites[0].address;
-
-                    // Check ITS availability
-                    const availability = await checkITSAvailability(postcode, building);
-                    setITSAvailability(availability);
-
-                    // If there are existing connections, check for optimizations
-                    if (formData.sites[0].connections?.length > 0) {
-                        const optimizations = await checkITSOptimization({
-                            connections: formData.sites[0].connections,
-                            address: formData.sites[0].address
-                        });
-                        setITSOptimizations(optimizations);
-                    }
-
-                    // Get prices for available services
-                    if (availability?.services) {
-                        const pricesPromises = availability.services.map(service =>
-                            getITSPrices(service.type, service.speed)
-                        );
-                        const prices = await Promise.all(pricesPromises);
-                        setITSAvailability(prev => ({
-                            ...prev,
-                            prices: prices.flat()
-                        }));
-                    }
-                } catch (error) {
-                    console.error('Error checking ITS services:', error);
-                } finally {
-                    setLoading(false);
-                }
-            }
-        };
-
-        checkAvailability();
-    }, [formData.sites[0].address]);
-
-    const validateConnection = (connection) => {
-        const errors = {};
-
-        if (!connection.type) errors.type = 'Connection type is required';
-        if (!connection.speed) errors.speed = 'Speed is required';
-        if (!connection.cost || isNaN(connection.cost)) errors.cost = 'Valid monthly cost is required';
-        if (!connection.term || isNaN(connection.term)) errors.term = 'Contract term is required';
-
-        return errors;
+    // Site Management
+    const removeSite = (siteId) => {
+        const updatedSites = formData.sites.filter(site => site.id !== siteId);
+        setFormData({
+            ...formData,
+            sites: updatedSites
+        });
     };
 
-    const handleConnectionChange = (index, field, value) => {
-        const updatedSites = [...formData.sites];
-        if (!updatedSites[0].connections) {
-            updatedSites[0].connections = [];
-        }
-
-        if (!updatedSites[0].connections[index]) {
-            updatedSites[0].connections[index] = {};
-        }
-
-        updatedSites[0].connections[index][field] = value;
-
-        // Clear validation error when field is changed
-        if (validationErrors[`connection${index}`]?.[field]) {
-            const newErrors = { ...validationErrors };
-            delete newErrors[`connection${index}`][field];
-            setValidationErrors(newErrors);
-        }
-
-        // If type changes, reset speed
-        if (field === 'type') {
-            updatedSites[0].connections[index].speed = '';
-        }
-
-        setFormData({ ...formData, sites: updatedSites });
-    };
-
+    // Connection Management
     const addConnection = () => {
-        const updatedSites = [...formData.sites];
-        if (!updatedSites[0].connections) {
-            updatedSites[0].connections = [];
-        }
+        if (!currentSiteId || !newConnection.type || !newConnection.speed || !newConnection.cost) return;
 
-        updatedSites[0].connections.push({
+        const updatedSites = formData.sites.map(site => {
+            if (site.id === currentSiteId) {
+                return {
+                    ...site,
+                    connections: [...(site.connections || []), { ...newConnection }]
+                };
+            }
+            return site;
+        });
+
+        setFormData({
+            ...formData,
+            sites: updatedSites
+        });
+
+        // Reset form
+        setNewConnection({
             type: '',
             speed: '',
             cost: '',
-            term: 36, // Default to 36 months for network connections
-            notes: '',
-            backup: false
+            backup: false,
+            term: '36'
+        });
+        setShowConnectionForm(false);
+        setCurrentSiteId(null);
+    };
+
+    const removeConnection = (siteId, connectionIndex) => {
+        const updatedSites = formData.sites.map(site => {
+            if (site.id === siteId) {
+                const updatedConnections = site.connections.filter((_, idx) => idx !== connectionIndex);
+                return {
+                    ...site,
+                    connections: updatedConnections
+                };
+            }
+            return site;
         });
 
-        setFormData({ ...formData, sites: updatedSites });
-        setShowManualEntry(true);
-    };
-
-    const removeConnection = (index) => {
-        const updatedSites = [...formData.sites];
-        updatedSites[0].connections.splice(index, 1);
-        setFormData({ ...formData, sites: updatedSites });
-    };
-
-    const handleSelectService = (service, pricing) => {
-        const updatedSites = [...formData.sites];
-        if (!updatedSites[0].connections) {
-            updatedSites[0].connections = [];
-        }
-
-        updatedSites[0].connections.push({
-            type: service.type,
-            speed: service.speed,
-            provider: 'ITS',
-            cost: pricing?.price || '',
-            term: pricing?.term || 36,
-            notes: '',
-            backup: false
+        setFormData({
+            ...formData,
+            sites: updatedSites
         });
-
-        setFormData({ ...formData, sites: updatedSites });
     };
 
-    const renderITSAvailability = () => {
-        if (!itsAvailability) return null;
+    // Helper functions
+    const calculateSiteCosts = (site) => {
+        const connections = site.connections || [];
+        return {
+            totalConnections: connections.length,
+            backupLinks: connections.filter(c => c.backup).length,
+            totalSpeed: connections.reduce((total, conn) => total + parseFloat(conn.speed), 0),
+            monthlyCost: connections.reduce((total, conn) => total + parseFloat(conn.cost), 0),
+            annualCost: connections.reduce((total, conn) => total + (parseFloat(conn.cost) * 12), 0)
+        };
+    };
 
-        return (
-            <div className="bg-white rounded-lg border p-4 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center">
-                        <Network className="w-5 h-5 text-blue-500 mr-2" />
-                        <h3 className="text-lg font-medium text-gray-900">Available ITS Services</h3>
-                    </div>
-                    <button
-                        onClick={() => setShowManualEntry(!showManualEntry)}
-                        className="text-sm text-blue-600 hover:text-blue-700"
-                    >
-                        Manual Entry
-                    </button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                    {itsAvailability.services?.map((service, index) => (
-                        <div key={index} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                            <div className="flex justify-between items-start">
-                                <div>
-                                    <h4 className="font-medium text-gray-900">{service.type}</h4>
-                                    <p className="text-sm text-gray-600">{service.speed}</p>
-                                    {service.features?.map((feature, fidx) => (
-                                        <span
-                                            key={fidx}
-                                            className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded mr-2 mt-2"
-                                        >
-                                            {feature}
-                                        </span>
-                                    ))}
-                                </div>
-                                {itsAvailability.prices?.[index] && (
-                                    <div className="text-right">
-                                        <p className="font-medium text-gray-900">
-                                            £{itsAvailability.prices[index].price}/month
-                                        </p>
-                                        <p className="text-sm text-gray-600">
-                                            {itsAvailability.prices[index].term} month contract
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                            <button
-                                onClick={() => handleSelectService(service, itsAvailability.prices?.[index])}
-                                className="mt-3 w-full bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition-colors"
-                            >
-                                Select This Service
-                            </button>
-                        </div>
-                    ))}
-                </div>
-
-                {itsOptimizations && (
-                    <div className="mt-6 border-t pt-4">
-                        <h4 className="text-lg font-medium text-gray-900 mb-3">Optimization Opportunities</h4>
-                        <div className="space-y-3">
-                            {itsOptimizations.recommendations.map((rec, index) => (
-                                <div key={index} className="bg-green-50 p-3 rounded-lg border border-green-200">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <p className="font-medium text-green-900">{rec.description}</p>
-                                            <p className="text-sm text-green-700 mt-1">
-                                                New: {rec.newSpeed} at £{rec.newPrice}/month
-                                            </p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-sm font-medium text-green-600">
-                                                Save £{(rec.currentPrice - rec.newPrice).toFixed(2)}/month
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={() => handleSelectService({
-                                            type: rec.type,
-                                            speed: rec.newSpeed
-                                        }, { price: rec.newPrice, term: rec.term })}
-                                        className="mt-2 w-full bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700 transition-colors"
-                                    >
-                                        Apply Optimization
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
+    const calculateTotalCosts = () => {
+        return (formData.sites || []).reduce((totals, site) => {
+            const costs = calculateSiteCosts(site);
+            return {
+                sites: totals.sites + 1,
+                connections: totals.connections + costs.totalConnections,
+                backups: totals.backups + costs.backupLinks,
+                speed: totals.speed + costs.totalSpeed,
+                monthlyCost: totals.monthlyCost + costs.monthlyCost,
+                annualCost: totals.annualCost + costs.annualCost
+            };
+        }, { sites: 0, connections: 0, backups: 0, speed: 0, monthlyCost: 0, annualCost: 0 });
     };
 
     return (
         <div className="space-y-6">
-            {/* Address Lookup */}
-            <div className="bg-white rounded-lg border p-4">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Site Address</h3>
-                <AddressLookup
-                    formData={formData}
-                    setFormData={setFormData}
-                    siteIndex={0}
-                />
+            {/* Add New Site Section */}
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-semibold">Network Requirements</h3>
+                    <div className="text-sm text-gray-500">
+                        {formData.sites?.length || 0} sites added
+                    </div>
+                </div>
+                <AddressLookup formData={formData} setFormData={setFormData} />
             </div>
 
-            {loading && (
-                <div className="flex items-center justify-center p-4">
-                    <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-                    <span className="ml-2">Checking ITS availability...</span>
+            {/* Existing Sites Display */}
+            {formData.sites?.length > 0 && (
+                <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                    <h3 className="text-lg font-semibold mb-4">Added Sites</h3>
+                    <div className="space-y-4">
+                        {formData.sites.map((site) => (
+                            <div key={site.id} className="border border-gray-200 rounded-lg p-4">
+                                <div className="flex justify-between items-start">
+                                    <div className="space-y-2">
+                                        <div className="flex items-center space-x-2">
+                                            <MapPin className="w-5 h-5 text-gray-400" />
+                                            <span className="font-medium">
+                                                {site.formattedAddress || formatAddress(site.address)}
+                                            </span>
+                                        </div>
+
+                                        {/* Connections List */}
+                                        <div className="pl-7 text-sm text-gray-600">
+                                            {site.connections?.length ? (
+                                                <div className="space-y-1">
+                                                    {site.connections.map((conn, idx) => (
+                                                        <div key={idx} className="flex items-center justify-between">
+                                                            <div className="flex items-center space-x-4">
+                                                                <Network className="w-4 h-4" />
+                                                                <span>
+                                                                    {conn.type} - {conn.speed}Mbps
+                                                                    {conn.backup && " (Backup)"}
+                                                                </span>
+                                                                <div className="text-gray-500">
+                                                                    £{parseFloat(conn.cost).toFixed(2)}/month
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                onClick={() => removeConnection(site.id, idx)}
+                                                                className="p-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md"
+                                                            >
+                                                                <X className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center space-x-2">
+                                                    <AlertCircle className="w-4 h-4 text-yellow-500" />
+                                                    <span>No connections configured</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Site Actions */}
+                                    <div className="flex space-x-2">
+                                        <button
+                                            onClick={() => {
+                                                setCurrentSiteId(site.id);
+                                                setShowConnectionForm(true);
+                                            }}
+                                            className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors duration-150"
+                                        >
+                                            <Plus className="w-5 h-5" />
+                                        </button>
+                                        <button
+                                            onClick={() => removeSite(site.id)}
+                                            className="p-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors duration-150"
+                                        >
+                                            <Trash2 className="w-5 h-5" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Site Summary */}
+                                <div className="mt-4 pt-4 border-t border-gray-100">
+                                    <div className="grid grid-cols-5 gap-4 text-sm">
+                                        <div>
+                                            <span className="text-gray-500">Connections:</span>{' '}
+                                            <span className="font-medium">{site.connections?.length || 0}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Backup Links:</span>{' '}
+                                            <span className="font-medium">
+                                                {site.connections?.filter(c => c.backup)?.length || 0}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Total Speed:</span>{' '}
+                                            <span className="font-medium">
+                                                {calculateSiteCosts(site).totalSpeed}Mbps
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Monthly Cost:</span>{' '}
+                                            <span className="font-medium">
+                                                £{calculateSiteCosts(site).monthlyCost.toFixed(2)}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Annual Cost:</span>{' '}
+                                            <span className="font-medium">
+                                                £{calculateSiteCosts(site).annualCost.toFixed(2)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Network Summary */}
+                    <div className="mt-6 pt-6 border-t border-gray-200">
+                        <h4 className="text-base font-medium mb-4">Network Summary</h4>
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="bg-blue-50 p-4 rounded-lg">
+                                <div className="flex justify-between items-center">
+                                    <div>
+                                        <div className="text-sm text-blue-600">Total Sites</div>
+                                        <div className="text-2xl font-bold text-blue-700">
+                                            {calculateTotalCosts().sites}
+                                        </div>
+                                    </div>
+                                    <MapPin className="w-8 h-8 text-blue-500" />
+                                </div>
+                            </div>
+                            <div className="bg-purple-50 p-4 rounded-lg">
+                                <div className="flex justify-between items-center">
+                                    <div>
+                                        <div className="text-sm text-purple-600">Total Speed</div>
+                                        <div className="text-2xl font-bold text-purple-700">
+                                            {calculateTotalCosts().speed}Mbps
+                                        </div>
+                                    </div>
+                                    <Network className="w-8 h-8 text-purple-500" />
+                                </div>
+                            </div>
+                            <div className="bg-green-50 p-4 rounded-lg">
+                                <div className="flex justify-between items-center">
+                                    <div>
+                                        <div className="text-sm text-green-600">Monthly Cost</div>
+                                        <div className="text-2xl font-bold text-green-700">
+                                            £{calculateTotalCosts().monthlyCost.toFixed(2)}
+                                        </div>
+                                    </div>
+                                    <PoundSterling className="w-8 h-8 text-green-500" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
-            {/* ITS Availability Section */}
-            {renderITSAvailability()}
-
-            {/* Manual Entry Section */}
-            {(showManualEntry || !itsAvailability) && (
-                <div className="space-y-4">
-                    {(!formData.sites[0].connections || formData.sites[0].connections.length === 0) && (
-                        <div className="text-center py-8">
-                            <Network className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                            <p className="text-gray-500">No network connections added yet</p>
+            {/* Add Connection Modal */}
+            {showConnectionForm && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-semibold">Add Connection</h3>
                             <button
-                                onClick={addConnection}
-                                className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                onClick={() => setShowConnectionForm(false)}
+                                className="text-gray-400 hover:text-gray-500"
                             >
-                                Add Network Connection
+                                <X className="w-5 h-5" />
                             </button>
                         </div>
-                    )}
 
-                    {formData.sites[0].connections?.map((connection, index) => (
-                        <div key={index} className="p-4 border rounded-lg bg-gray-50">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-lg font-medium">Connection {index + 1}</h3>
-                                <button
-                                    onClick={() => removeConnection(index)}
-                                    className="text-red-500 hover:text-red-600"
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Connection Type
+                                </label>
+                                <select
+                                    value={newConnection.type}
+                                    onChange={(e) => setNewConnection({...newConnection, type: e.target.value})}
+                                    className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 >
-                                    <Trash2 className="w-5 h-5" />
-                                </button>
+                                    <option value="">Select Type</option>
+                                    <option value="Ethernet">Ethernet</option>
+                                    <option value="Dark Fibre">Dark Fibre</option>
+                                    <option value="Broadband">Broadband</option>
+                                    <option value="4G">4G</option>
+                                </select>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Type
-                                    </label>
-                                    <select
-                                        value={connection.type}
-                                        onChange={(e) => handleConnectionChange(index, 'type', e.target.value)}
-                                        className={`w-full rounded-md border ${
-                                            validationErrors[`connection${index}`]?.type
-                                                ? 'border-red-300'
-                                                : 'border-gray-300'
-                                        } px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500`}
-                                    >
-                                        <option value="">Select Type</option>
-                                        {connectionTypes.map(type => (
-                                            <option key={type.value} value={type.value}>
-                                                {type.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    {validationErrors[`connection${index}`]?.type && (
-                                        <p className="mt-1 text-sm text-red-600 flex items-center">
-                                            <AlertCircle className="w-4 h-4 mr-1" />
-                                            {validationErrors[`connection${index}`].type}
-                                        </p>
-                                    )}
-                                </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Speed (Mbps)
+                                </label>
+                                <input
+                                    type="number"
+                                    value={newConnection.speed}
+                                    onChange={(e) => setNewConnection({...newConnection, speed: e.target.value})}
+                                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                                    min="0"
+                                    step="1"
+                                />
+                            </div>
 
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Speed
-                                    </label>
-                                    <select
-                                        value={connection.speed}
-                                        onChange={(e) => handleConnectionChange(index, 'speed', e.target.value)}
-                                        className={`w-full rounded-md border ${
-                                            validationErrors[`connection${index}`]?.speed
-                                                ? 'border-red-300'
-                                                : 'border-gray-300'
-                                        } px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500`}
-                                        disabled={!connection.type}
-                                    >
-                                        <option value="">Select Speed</option>
-                                        {connection.type && speedOptions[connection.type].map(speed => (
-                                            <option key={speed} value={speed}>
-                                                {speed}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    {validationErrors[`connection${index}`]?.speed && (
-                                        <p className="mt-1 text-sm text-red-600 flex items-center">
-                                            <AlertCircle className="w-4 h-4 mr-1" />
-                                            {validationErrors[`connection${index}`].speed}
-                                        </p>
-                                    )}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Monthly Cost (£)
-                                    </label>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Monthly Cost (£)
+                                </label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                        <span className="text-gray-500 sm:text-sm">£</span>
+                                    </div>
                                     <input
                                         type="number"
-                                        value={connection.cost || ''}
-                                        onChange={(e) => handleConnectionChange(index, 'cost', e.target.value)}
-                                        className={`w-full rounded-md border ${
-                                            validationErrors[`connection${index}`]?.cost
-                                                ? 'border-red-300'
-                                                : 'border-gray-300'
-                                        } px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500`}
-                                        placeholder="0.00"
+                                        value={newConnection.cost}
+                                        onChange={(e) => setNewConnection({...newConnection, cost: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-md pl-7 pr-3 py-2"
                                         min="0"
                                         step="0.01"
-                                    />
-                                    {validationErrors[`connection${index}`]?.cost && (
-                                        <p className="mt-1 text-sm text-red-600 flex items-center">
-                                            <AlertCircle className="w-4 h-4 mr-1" />
-                                            {validationErrors[`connection${index}`].cost}
-                                        </p>
-                                    )}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Contract Term (months)
-                                    </label>
-                                    <input
-                                        type="number"
-                                        value={connection.term || ''}
-                                        onChange={(e) => handleConnectionChange(index, 'term', e.target.value)}
-                                        className={`w-full rounded-md border ${
-                                            validationErrors[`connection${index}`]?.term
-                                                ? 'border-red-300'
-                                                : 'border-gray-300'
-                                        } px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500`}
-                                        min="0"
-                                        step="1"
-                                    />
-                                    {validationErrors[`connection${index}`]?.term && (
-                                        <p className="mt-1 text-sm text-red-600 flex items-center">
-                                            <AlertCircle className="w-4 h-4 mr-1" />
-                                            {validationErrors[`connection${index}`].term}
-                                        </p>
-                                    )}
-                                </div>
-
-                                <div className="col-span-2">
-                                    <label className="flex items-center space-x-2">
-                                        <input
-                                            type="checkbox"
-                                            checked={connection.backup || false}
-                                            onChange={(e) => handleConnectionChange(index, 'backup', e.target.checked)}
-                                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="text-sm font-medium text-gray-700">
-                                            This is a backup connection
-                                        </span>
-                                    </label>
-                                </div>
-
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Notes
-                                    </label>
-                                    <textarea
-                                        value={connection.notes || ''}
-                                        onChange={(e) => handleConnectionChange(index, 'notes', e.target.value)}
-                                        className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        rows="2"
-                                        placeholder="Any additional information..."
+                                        placeholder="0.00"
                                     />
                                 </div>
                             </div>
-                        </div>
-                    ))}
 
-                    {formData.sites[0].connections?.length > 0 && (
-                        <button
-                            onClick={addConnection}
-                            className="flex items-center px-4 py-2 text-sm text-blue-600 hover:text-blue-700"
-                        >
-                            <Plus className="w-4 h-4 mr-1" />
-                            Add Another Connection
-                        </button>
-                    )}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Contract Term
+                                </label>
+                                <select
+                                    value={newConnection.term}
+                                    onChange={(e) => setNewConnection({...newConnection, term: e.target.value})}
+                                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                                >
+                                    <option value="12">12 Months</option>
+                                    <option value="36">36 Months</option>
+                                    <option value="60">60 Months</option>
+                                </select>
+                            </div>
+
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    id="backup"
+                                    checked={newConnection.backup}
+                                    onChange={(e) => setNewConnection({...newConnection, backup: e.target.checked})}
+                                    className="h-4 w-4 text-blue-600 rounded border-gray-300"
+                                />
+                                <label htmlFor="backup" className="ml-2 text-sm text-gray-700">
+                                    Backup Connection
+                                </label>
+                            </div>
+
+                            {/* Validation Error Messages */}
+                            {(!newConnection.type || !newConnection.speed || !newConnection.cost) && (
+                                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-md">
+                                    <div className="flex items-center space-x-1">
+                                        <AlertCircle className="w-4 h-4" />
+                                        <span>Please fill in all required fields:</span>
+                                    </div>
+                                    <ul className="list-disc ml-5 mt-1">
+                                        {!newConnection.type && <li>Connection type is required</li>}
+                                        {!newConnection.speed && <li>Speed is required</li>}
+                                        {!newConnection.cost && <li>Monthly cost is required</li>}
+                                    </ul>
+                                </div>
+                            )}
+
+                            <div className="flex justify-end space-x-3 mt-6">
+                                <button
+                                    onClick={() => setShowConnectionForm(false)}
+                                    className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={addConnection}
+                                    disabled={!newConnection.type || !newConnection.speed || !newConnection.cost}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300"
+                                >
+                                    Add Connection
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
-
-            {/* Summary Section */}
-            {formData.sites[0].connections?.length > 0 && (
-                <div className="mt-6 bg-gray-50 rounded-lg p-4">
-                    <div className="flex justify-between items-center">
-                        <h3 className="text-lg font-medium text-gray-900">Connection Summary</h3>
-                        <div className="text-right">
-                            <p className="text-sm text-gray-600">Total Monthly Cost</p>
-                            <p className="text-lg font-bold text-blue-600">
-                                £{formData.sites[0].connections.reduce((sum, conn) =>
-                                sum + (Number(conn.cost) || 0), 0).toFixed(2)}
-                            </p>
-                        </div>
-                    </div>
-                    <div className="mt-2">
-                        <p className="text-sm text-gray-600">
-                            {formData.sites[0].connections.length} connection{formData.sites[0].connections.length !== 1 ? 's' : ''} configured
-                        </p>
-                        <p className="text-sm text-gray-600">
-                            {formData.sites[0].connections.filter(conn => conn.backup).length} backup connection(s)
-                        </p>
-                    </div>
-                </div>
-            )}
-
-            {/* Information Box */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <div className="flex items-start">
-                    <Network className="w-5 h-5 text-blue-500 mt-0.5 mr-3" />
-                    <div>
-                        <h3 className="text-sm font-medium text-blue-800">Network Connection Information</h3>
-                        <p className="mt-1 text-sm text-blue-600">
-                            Add all network connections for this site. Consider adding backup connections
-                            for critical services. We'll check ITS availability and recommend optimizations
-                            based on your current setup.
-                        </p>
-                    </div>
-                </div>
-            </div>
         </div>
     );
 };

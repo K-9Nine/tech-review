@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\NathanHill-Haimes\\RiderProjects\\Amvia_Datastore_V_1_0\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj": {}
+    "C:\\Users\\NathanHill-Haimes\\RiderProjects\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj": {}
   },
   "projects": {
-    "C:\\Users\\NathanHill-Haimes\\RiderProjects\\Amvia_Datastore_V_1_0\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj": {
+    "C:\\Users\\NathanHill-Haimes\\RiderProjects\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\Amvia_Datastore_V_1_0\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj",
+        "projectUniqueName": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj",
         "projectName": "TechReview.Api",
-        "projectPath": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\Amvia_Datastore_V_1_0\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj",
+        "projectPath": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj",
         "packagesPath": "C:\\Users\\NathanHill-Haimes\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\Amvia_Datastore_V_1_0\\tech-review\\tech-review-api\\TechReview.Api\\obj\\",
+        "outputPath": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\tech-review\\tech-review-api\\TechReview.Api\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\NathanHill-Haimes\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -75,7 +75,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.403/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Users\\NathanHill-Haimes\\.dotnet\\sdk\\8.0.303/PortableRuntimeIdentifierGraph.json"
         }
       }
     }
