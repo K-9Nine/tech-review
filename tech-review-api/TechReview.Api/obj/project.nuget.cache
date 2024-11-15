@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "3PctcGhf57A=",
+  "dgSpecHash": "33mGAKbCDfw=",
   "success": true,
-  "projectFilePath": "C:\\Users\\NathanHill-Haimes\\RiderProjects\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj",
+  "projectFilePath": "C:\\Users\\NathanHill-Haimes\\Documents\\GitHub\\tech-review\\tech-review-api\\TechReview.Api\\TechReview.Api.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\NathanHill-Haimes\\.nuget\\packages\\microsoft.aspnetcore.cors\\2.2.0\\microsoft.aspnetcore.cors.2.2.0.nupkg.sha512",
     "C:\\Users\\NathanHill-Haimes\\.nuget\\packages\\microsoft.aspnetcore.http.abstractions\\2.2.0\\microsoft.aspnetcore.http.abstractions.2.2.0.nupkg.sha512",
