@@ -1,53 +1,67 @@
-﻿export const checkITSAvailability = async (postcode, buildingNumber) => {
-    try {
-        // Mock response for now - replace with actual ITS API endpoint
-        const response = await fetch('https://api.its.co.uk/availability', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer YOUR_ITS_API_KEY'
-            },
-            body: JSON.stringify({
-                postcode,
-                buildingNumber
-            })
-        });
-
-        const data = await response.json();
-        return data;
-    } catch (error) {
-        console.error('Error checking ITS availability:', error);
-        throw error;
-    }
+﻿const BASE_URL = 'https://api.itstechnologygroup.com/api/v1';
+const AUTH_HEADER = {
+    Authorization: '528|uAibHnZo7mvcP2HXkqt0IfTqRaNXIpd3YnYzb6gw2ed12aac', // Replace with your real access key
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
 };
 
-export const getITSPrices = async (technology, speed) => {
-    try {
-        const response = await fetch(`/api/its-prices?technology=${technology}&speed=${speed}`);
-        const data = await response.json();
-        return data;
-    } catch (error) {
-        console.error('Error fetching ITS prices:', error);
-        throw error;
+// Create availability search and get UUID
+export const createAvailabilitySearch = async (payload) => {
+    const response = await fetch(`${BASE_URL}/availability/search/create`, {
+        method: 'POST',
+        headers: AUTH_HEADER,
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to create availability search: ${errorText}`);
     }
+
+    return response.json();
 };
 
-// Check for better ITS options
-export const checkITSOptimization = async (currentServices) => {
-    try {
-        const response = await fetch('https://api.its.co.uk/optimize', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer YOUR_ITS_API_KEY'
-            },
-            body: JSON.stringify(currentServices)
-        });
+// Fetch quotes using UUID
+export const getQuotesByUUID = async (uuid) => {
+    const response = await fetch(`${BASE_URL}/availability/search/results/${uuid}`, {
+        method: 'GET',
+        headers: AUTH_HEADER,
+    });
 
-        const data = await response.json();
-        return data;
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch quotes: ${errorText}`);
+    }
+
+    return response.json();
+};
+
+// Check ITS pricing (integrates createAvailabilitySearch and getQuotesByUUID)
+export const checkITSPricing = async (site) => {
+    try {
+        const payload = {
+            postcode: site.address.postcode,
+            address_line_1: site.address.building,
+            address_line_2: site.address.street,
+            town: site.address.city,
+            county: site.address.county,
+            latitude: site.address.latitude,
+            longitude: site.address.longitude,
+            connections: [{ bearer: 1000, speed: 1000 }], // Example connection data
+            term_months: [12],
+            its_only: false,
+        };
+
+        // Step 1: Create availability search
+        const { uuid } = await createAvailabilitySearch(payload);
+
+        // Step 2: Fetch quotes using UUID
+        const quotes = await getQuotesByUUID(uuid);
+
+        // Return the fetched quotes
+        return quotes;
     } catch (error) {
-        console.error('Error checking ITS optimizations:', error);
+        console.error('Error checking ITS pricing:', error);
         throw error;
     }
 };

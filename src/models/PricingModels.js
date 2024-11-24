@@ -49,6 +49,35 @@ public DateTime? ValidTo { get; set; }
 public string Notes { get; set; }
 }
 
+public class AvailabilityRequest
+{
+    [Required]
+    public string Postcode { get; set; }
+
+[Required]
+public string AddressLine1 { get; set; }
+
+public string AddressLine2 { get; set; }
+public string Town { get; set; }
+public string County { get; set; }
+public double? Latitude { get; set; }
+public double? Longitude { get; set; }
+}
+
+public class AvailabilityResult
+{
+    public string Status { get; set; }
+public List<Service> Services { get; set; }
+}
+
+public class Service
+{
+    public string Name { get; set; }
+public double DownloadSpeed { get; set; }
+public double UploadSpeed { get; set; }
+public double MonthlyCost { get; set; }
+}
+
 // DbContext
 public class PricingDbContext : DbContext
 {

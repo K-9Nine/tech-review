@@ -208,3 +208,9 @@ body {
 .text-gray-600 {
   color: #4b5563;
 }
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+  }
+}
