@@ -1,6 +1,7 @@
-﻿import React, { useState } from 'react';
-import { Trash2, Network, AlertCircle, MapPin, Plus, PoundSterling, TrendingDown, Loader2, CheckCircle } from 'lucide-react';
-import ZenAddressLookup from '../components/ZenAddressLookup';
+﻿import React, { useState, useCallback } from 'react';
+import { Trash2, Network, AlertCircle, MapPin, Plus, PoundSterling, Loader2, CheckCircle, TrendingDown } from 'lucide-react';
+import AddressLookup from './AddressLookup';
+import debounce from 'lodash/debounce';
 
 // Constants
 const SPEED_TIERS = {
@@ -9,480 +10,285 @@ const SPEED_TIERS = {
     FAST: 100
 };
 
-const connectionTypes = [
-    "Software Defined Ethernet",
-    "Ethernet First Mile",
-    "Dedicated Ethernet",
-    "Dark Fibre"
-];
+const speedOptions = ["10", "20", "50", "100", "200", "500", "1000"];
 
-const speedOptions = {
-    "Software Defined Ethernet": ["100", "200", "500", "1000"],
-    "Ethernet First Mile": ["10", "20", "50", "100"],
-    "Dedicated Ethernet": ["100", "1000", "10000"],
-    "Dark Fibre": ["1000", "10000"]
+const getSpeedTierBadge = (speed) => {
+    const speedNum = parseInt(speed, 10);
+    let color = '';
+    let text = '';
+
+    if (speedNum >= SPEED_TIERS.ULTRA_FAST) {
+        color = 'bg-purple-100 text-purple-800';
+        text = 'Ultra Fast';
+    } else if (speedNum >= SPEED_TIERS.SUPER_FAST) {
+        color = 'bg-green-100 text-green-800';
+        text = 'Super Fast';
+    } else {
+        color = 'bg-yellow-100 text-yellow-800';
+        text = 'Fast';
+    }
+
+    return (
+        <span className={`text-xs font-medium px-2.5 py-0.5 rounded ${color}`}>
+            {text} ({speedNum >= 1000 ? `${speedNum/1000}Gbps` : `${speedNum}Mbps`})
+        </span>
+    );
 };
 
-const initialConnectionState = {
-    type: '',
-    speed: '',
-    proposedCost: '',
-    term: '36',
-    isBackup: false
-};
-
-const initialSiteState = {
-    id: Date.now(),
-    name: '',
-    address: null,
-    connections: []
+const initialFormData = {
+    sites: [
+        {
+            address: null,
+            connections: [
+                {
+                    id: Date.now(),
+                    speed: '',
+                    isBackup: false
+                }
+            ]
+        }
+    ]
 };
 
 const NetworkForm = ({ formData, setFormData }) => {
-    // State
-    const [loadingIndex, setLoadingIndex] = useState(null);
-    const [apiError, setApiError] = useState(null);
+    // State declarations
     const [loadingConnections, setLoadingConnections] = useState({});
+    const [apiError, setApiError] = useState(null);
     const [pricingResults, setPricingResults] = useState({});
     const [debugLogs, setDebugLogs] = useState([]);
     const [formErrors, setFormErrors] = useState([]);
+    const [apiData, setApiData] = useState(null);
+    const [addressInput, setAddressInput] = useState('');
+    const [addressResults, setAddressResults] = useState([]);
+    const [selectedAddress, setSelectedAddress] = useState(null);
+    const [isSearching, setIsSearching] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
 
-    // Helper Functions
+    // Utility functions
     const addDebugLog = (message, data = null) => {
         const timestamp = new Date().toISOString();
-        const logEntry = {
+        setDebugLogs(prev => [...prev, {
             timestamp,
             message,
             data: data ? JSON.stringify(data, null, 2) : null
-        };
-        console.log(`[${timestamp}] ${message}`, data);
-        setDebugLogs(prev => [logEntry, ...prev]);
+        }]);
     };
 
-    const getSpeedTierBadge = (speed) => {
-        const speedValue = typeof speed === 'string' ? parseInt(speed) : speed;
-        if (speedValue >= SPEED_TIERS.ULTRA_FAST) {
-            return <span className="bg-purple-100 text-purple-800 text-xs font-medium px-2.5 py-0.5 rounded-full">Ultra-Fast</span>;
-        } else if (speedValue >= SPEED_TIERS.SUPER_FAST) {
-            return <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">Super-Fast</span>;
-        } else if (speedValue >= SPEED_TIERS.FAST) {
-            return <span className="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full">Fast</span>;
-        }
-        return null;
-    };
-
-    const formatActivationDate = (dateString) => {
-        if (!dateString) return null;
-        const date = new Date(dateString);
-        return new Intl.DateTimeFormat('en-GB', {
-            day: 'numeric',
-            month: 'short',
-            year: 'numeric'
-        }).format(date);
-    };
-
-    // Validation
-    const validateSites = (sites) => {
-        const errors = [];
-        sites.forEach((site, index) => {
-            if (!site.name?.trim()) {
-                errors.push(`Site ${index + 1} name is required`);
-            }
-        });
-        return errors;
-    };
-
-    // API Functions
+    // API interaction functionsS
     const checkITSPricing = async (site, connection) => {
         try {
-            addDebugLog('Starting ITS pricing check', { site, connection });
+            // First get coordinates from OS API
+            const geocodeResponse = await fetch(
+                `https://api.os.uk/search/places/v1/find?${new URLSearchParams({
+                    query: `${site.address.address_line_1}, ${site.address.postcode}`,
+                    key: import.meta.env.VITE_OS_PLACES_API_KEY,
+                    maxresults: '1',
+                    output_srs: 'WGS84'
+                })}`
+            );
 
-            const getBearerAndSpeed = (connectionType, speed) => {
-                const speedNum = parseInt(speed, 10);
-                let bearer;
+            const geocodeData = await geocodeResponse.json();
+            console.log('Geocode response:', geocodeData);
 
-                if (connectionType === "Ethernet First Mile") {
-                    bearer = 100;
-                } else {
-                    bearer = 1000;
-                }
+            if (!geocodeData.results?.[0]) {
+                throw new Error('Could not geocode address');
+            }
 
-                let adjustedSpeed = speedNum;
-                if (bearer === 100) {
-                    adjustedSpeed = Math.ceil(speedNum / 10) * 10;
-                } else if (bearer === 1000) {
-                    adjustedSpeed = Math.ceil(speedNum / 100) * 100;
-                } else if (bearer === 10000) {
-                    adjustedSpeed = Math.ceil(speedNum / 1000) * 1000;
-                }
+            // Clean up address data - more precise formatting
+            const cleanAddress = site.address.address_line_1
+                .split(',')[1]  // Get part after first comma
+                .trim()         // Remove whitespace
+                .replace(/SHEFFIELD/i, '')  // Remove SHEFFIELD
+                .replace(/S3 8JY/i, '')     // Remove postcode
+                .replace(/,/g, '')          // Remove any remaining commas
+                .trim()                     // Final trim
+                .replace(/^(\d+)\s*,?\s*(.*)$/i, '$1 $2')  // Format number and street
+                .replace(/\s+/g, ' ');      // Normalize spaces
 
-                return { bearer, speed: adjustedSpeed };
-            };
-
-            const { bearer, speed } = getBearerAndSpeed(connection.type, connection.speed);
-
-            const searchBody = {
-                postcode: site.address.postcode.toUpperCase().replace(/\s/g, ''),
-                address_line_1: site.address.building
-                    ? `${site.address.building} ${site.address.street}`.trim()
-                    : site.address.street || '',
-                town: site.address.city || '',
-                county: site.address.county || '',
-                premise_type: "BUSINESS",
-                term_months: [parseInt(connection.term, 10)],
+            // Format request payload
+            const requestPayload = {
+                postcode: site.address.postcode,
+                address_line_1: cleanAddress,
+                town: "Sheffield",          // Hardcoded proper case
+                latitude: geocodeData.results[0].DPA.LAT,
+                longitude: geocodeData.results[0].DPA.LNG,
+                term_months: [36, 60],
+                its_only: false,
                 connections: [
                     {
-                        bearer,
-                        speed
+                        bearer: parseInt(site.connections[0].speed, 10),
+                        speed: parseInt(site.connections[0].speed, 10)
                     }
                 ]
             };
 
-            if (site.address.addressReferenceNumber) {
-                const numericUprn = parseInt(site.address.addressReferenceNumber.replace(/\D/g, ''), 10);
-                if (!isNaN(numericUprn)) {
-                    searchBody.uprn = numericUprn;
-                }
-            }
+            console.log('Request payload:', requestPayload);
 
-            addDebugLog('Making initial request', searchBody);
-
-            const searchResponse = await fetch('http://localhost:3001/api/its/availability', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(searchBody)
+            console.log('🔍 POST Request:', {
+                url: '/api/its/availability',
+                payload: requestPayload
             });
 
-            if (!searchResponse.ok) {
-                const errorData = await searchResponse.json();
-                addDebugLog('Search failed', errorData);
-                throw new Error(errorData.error || `Search failed: ${searchResponse.status}`);
-            }
+            const searchResponse = await fetch('/api/its/availability', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(requestPayload)
+            });
 
             const searchData = await searchResponse.json();
-            if (!searchData.data?.uuid) {
-                addDebugLog('Invalid search response', searchData);
-                throw new Error('No search ID returned');
-            }
+            const searchId = searchData?.data?.uuid;
+            
+            console.log('🔑 Search ID:', searchId);
 
-            addDebugLog('Search successful', searchData);
-
-            // Poll for results
+            // Polling logic
             let attempts = 0;
-            const maxAttempts = 10;
-            const waitTime = 3000;
+            const maxAttempts = 30;  // 5 minutes total
+            let previousQuoteCount = 0;
+            let noNewQuotesCount = 0;
 
             while (attempts < maxAttempts) {
-                addDebugLog(`Checking results (Attempt ${attempts + 1}/${maxAttempts})`);
+                console.log(`📊 GET Request attempt ${attempts + 1}/${maxAttempts}`);
+                
+                const resultsResponse = await fetch(`/api/its/results/${searchId}`);
+                const resultsData = await resultsResponse.json();
+                
+                const currentQuoteCount = resultsData.data.quotes?.length || 0;
+                const newQuotes = currentQuoteCount - previousQuoteCount;
+                
+                if (newQuotes === 0) noNewQuotesCount++; else noNewQuotesCount = 0;
+                previousQuoteCount = currentQuoteCount;
 
-                await new Promise(resolve => setTimeout(resolve, waitTime));
-
-                try {
-                    const resultsResponse = await fetch(`http://localhost:3001/api/its/results/${searchData.data.uuid}`, {
-                        headers: { 'Content-Type': 'application/json' }
-                    });
-
-                    const resultsData = await resultsResponse.json();
-                    addDebugLog(`Results attempt ${attempts + 1}`, resultsData);
-
-                    if (resultsResponse.status === 404) {
-                        addDebugLog('Results not ready', resultsData);
-                        attempts++;
-                        continue;
-                    }
-
-                    if (!resultsResponse.ok) {
-                        addDebugLog('Results request failed', resultsData);
-                        throw new Error(resultsData.error || `Results failed: ${resultsResponse.status}`);
-                    }
-
-                    if (resultsData.data?.quotes && resultsData.data.quotes.length > 0) {
-                        // Group quotes by term
-                        const quotesByTerm = resultsData.data.quotes.reduce((acc, quote) => {
-                            const term = quote.term_months.toString();
-                            if (!acc[term] || quote.monthly_cost < acc[term].monthly_cost) {
-                                acc[term] = quote;
-                            }
-                            return acc;
-                        }, {});
-
-                        // Get the best quote for each term
-                        return {
-                            termPrices: {
-                                '12': quotesByTerm['12']?.monthly_cost || null,
-                                '24': quotesByTerm['24']?.monthly_cost || null,
-                                '36': quotesByTerm['36']?.monthly_cost || null,
-                                '60': quotesByTerm['60']?.monthly_cost || null
-                            },
-                            installCosts: {
-                                '12': quotesByTerm['12']?.install_cost || null,
-                                '24': quotesByTerm['24']?.install_cost || null,
-                                '36': quotesByTerm['36']?.install_cost || null,
-                                '60': quotesByTerm['60']?.install_cost || null
-                            },
-                            supplier: quotesByTerm[connection.term]?.supplier?.name || '',
-                            productName: quotesByTerm[connection.term]?.product_name || '',
-                            additionalInfo: quotesByTerm[connection.term]?.additionalInformation || []
-                        };
-                    }
-
-                    addDebugLog('No quotes found in response', resultsData);
-                    attempts++;
-
-                } catch (error) {
-                    addDebugLog('Error checking results', error);
-                    attempts++;
+                // Exit if we have quotes and no new ones for 3 attempts
+                if (currentQuoteCount > 0 && noNewQuotesCount >= 3) {
+                    return resultsData;
                 }
+
+                await new Promise(resolve => setTimeout(resolve, 10000));
+                attempts++;
             }
 
-            throw new Error('Could not get quotes after multiple attempts');
+            throw new Error('Timeout waiting for quotes');
 
         } catch (error) {
-            addDebugLog('Fatal error in checkITSPricing', error);
+            console.error('❌ Error:', error);
             throw error;
         }
     };
 
-    // Event Handlers
-    const handleCheckPricing = async (siteIndex) => {
-        setLoadingIndex(siteIndex);
-        setApiError(null);
-        addDebugLog('Starting price check for site', { siteIndex });
+    // Helper function to process quotes
+    const processQuotes = (quotes = []) => {
+        if (!quotes.length) return null;
+
+        // Sort quotes by monthly cost
+        const sortedQuotes = [...quotes].sort((a, b) => a.monthly_cost - b.monthly_cost);
+        
+        // Get the best quote (lowest monthly cost)
+        const bestQuote = sortedQuotes[0];
+
+        return {
+            bestQuote,
+            allQuotes: sortedQuotes
+        };
+    };
+
+    const handlePricingCheck = async (siteIndex, connectionIndex) => {
+        const site = formData.sites[siteIndex];
+        
+        // Create minimal connection object
+        const connection = {
+            speed: site.connections[connectionIndex].speed,
+            isBackup: site.connections[connectionIndex].isBackup || false
+        };
+
+        addDebugLog('Starting pricing check for:', {
+            siteIndex,
+            connectionIndex,
+            site,
+            connection
+        });
+
+        setLoadingConnections(prev => ({
+            ...prev,
+            [`${siteIndex}-${connectionIndex}`]: true
+        }));
 
         try {
-            const site = formData.sites[siteIndex];
+            const results = await checkITSPricing(site, connection);
+            addDebugLog('Pricing results:', results);
 
-            if (!site.name?.trim()) {
-                throw new Error('Site name is required');
-            }
+            setPricingResults(prev => ({
+                ...prev,
+                [`${siteIndex}-${connectionIndex}`]: results
+            }));
 
-            for (let connectionIndex = 0; connectionIndex < site.connections.length; connectionIndex++) {
-                const connection = site.connections[connectionIndex];
-                addDebugLog('Checking connection', { connectionIndex, connection });
-
-                setLoadingConnections(prev => ({
-                    ...prev,
-                    [`${siteIndex}-${connectionIndex}`]: true
-                }));
-
-                try {
-                    const data = await checkITSPricing(site, connection);
-                    addDebugLog('Received pricing data', data);
-                    setPricingResults(prev => ({
-                        ...prev,
-                        [`${siteIndex}-${connectionIndex}`]: data
-                    }));
-                } finally {
-                    setLoadingConnections(prev => ({
-                        ...prev,
-                        [`${siteIndex}-${connectionIndex}`]: false
-                    }));
-                }
-            }
         } catch (error) {
-            addDebugLog('Error in handleCheckPricing', { error: error.message });
-            setApiError(error.message);
+            addDebugLog('Pricing check failed:', error.message);
+            setApiError(`Failed to get pricing: ${error.message}`);
         } finally {
-            setLoadingIndex(null);
+            setLoadingConnections(prev => ({
+                ...prev,
+                [`${siteIndex}-${connectionIndex}`]: false
+            }));
         }
     };
 
-    // Site Management Functions
+    // Site management functions
     const addSite = () => {
-        addDebugLog('Adding new site');
         setFormData({
             ...formData,
             sites: [
                 ...formData.sites,
-                { ...initialSiteState, id: Date.now() }
+                {
+                    address: null,
+                    connections: [
+                        {
+                            id: Date.now(),
+                            speed: '',
+                            isBackup: false
+                        }
+                    ]
+                }
             ]
         });
     };
 
-    const removeSite = (siteIndex) => {
-        addDebugLog('Removing site', { siteIndex });
-        const updatedSites = formData.sites.filter((_, index) => index !== siteIndex);
+    const removeSite = (index) => {
+        const updatedSites = [...formData.sites];
+        updatedSites.splice(index, 1);
         setFormData({ ...formData, sites: updatedSites });
     };
 
-    // Connection Management Functions
     const addConnection = (siteIndex) => {
-        addDebugLog('Adding new connection', { siteIndex });
         const updatedSites = [...formData.sites];
         updatedSites[siteIndex].connections.push({
-            ...initialConnectionState,
-            id: Date.now()
+            id: Date.now(),
+            speed: '',
+            isBackup: false
         });
+        
         setFormData({ ...formData, sites: updatedSites });
     };
 
     const removeConnection = (siteIndex, connectionIndex) => {
-        addDebugLog('Removing connection', { siteIndex, connectionIndex });
         const updatedSites = [...formData.sites];
         updatedSites[siteIndex].connections.splice(connectionIndex, 1);
         setFormData({ ...formData, sites: updatedSites });
     };
 
-    const updateConnectionField = (siteIndex, connectionIndex, field, value) => {
-        addDebugLog('Updating connection field', { siteIndex, connectionIndex, field, value });
+    const handleConnectionUpdate = (siteIndex, connectionIndex, field, value) => {
         const updatedSites = [...formData.sites];
+        const connection = updatedSites[siteIndex].connections[connectionIndex];
+        
         updatedSites[siteIndex].connections[connectionIndex] = {
-            ...updatedSites[siteIndex].connections[connectionIndex],
-            [field]: value
+            id: connection.id,
+            speed: field === 'speed' ? value : connection.speed,
+            isBackup: field === 'isBackup' ? value : connection.isBackup
         };
+        
         setFormData({ ...formData, sites: updatedSites });
-    };
-
-    // Render Functions
-    const renderPricingComparison = (connection, pricingKey) => {
-        const pricingData = pricingResults[pricingKey];
-        if (!pricingData || !pricingData.termPrices) return null;
-
-        // Filter out null prices and get available prices
-        const validPrices = Object.entries(pricingData.termPrices)
-            .filter(([_, price]) => price !== null)
-            .reduce((acc, [term, price]) => {
-                acc[term] = price;
-                return acc;
-            }, {});
-
-        if (Object.keys(validPrices).length === 0) return null;
-
-        const currentCost = parseFloat(connection.proposedCost) || 0;
-
-        // Get the price for the selected term or the lowest available price
-        const selectedTerm = connection.term || '12';
-        const recommendedPrice = validPrices[selectedTerm] ||
-            Math.min(...Object.values(validPrices));
-
-        const savings = currentCost - recommendedPrice;
-        const savingsPercentage = currentCost > 0 ? ((savings / currentCost) * 100).toFixed(1) : 0;
-
-        // Safely get installation cost
-        const termInstallCost = pricingData.installCosts &&
-        pricingData.installCosts[selectedTerm] &&
-        !isNaN(pricingData.installCosts[selectedTerm]) ?
-            Number(pricingData.installCosts[selectedTerm]) : 0;
-
-        return (
-            <div className="mt-4 space-y-4">
-                {savings > 0 && (
-                    <div className="bg-blue-50 rounded-lg p-4">
-                        <h4 className="font-medium flex items-center gap-2 text-blue-700">
-                            <TrendingDown className="h-4 w-4" />
-                            Potential Cost Savings
-                        </h4>
-                        <div className="grid gap-2 mt-2">
-                            <div className="flex justify-between">
-                                <span className="text-sm">Current Monthly Cost:</span>
-                                <span className="font-medium">£{currentCost.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-sm">Recommended Price:</span>
-                                <span className="font-medium">£{recommendedPrice.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between text-blue-600 font-medium pt-2 border-t border-blue-100">
-                                <span>Monthly Savings:</span>
-                                <span>£{savings.toFixed(2)} ({savingsPercentage}%)</span>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                <div className="space-y-2">
-                    {termInstallCost > 0 && (
-                        <div className="text-sm text-gray-600">
-                            <span className="font-medium">Installation Fee:</span> £{termInstallCost.toFixed(2)}
-                        </div>
-                    )}
-                    <div className="text-sm text-gray-600">
-                        <span className="font-medium">Provider:</span> Amvia
-                    </div>
-                    {pricingData.productName && (
-                        <div className="text-sm text-gray-600">
-                            <span className="font-medium">Product:</span> {pricingData.productName}
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    const handleContractTermSelect = (siteIndex, connectionIndex, term) => {
-        setFormData(prevFormData => {
-            const newFormData = { ...prevFormData };
-            newFormData.sites[siteIndex].connections[connectionIndex].term = term;
-            return newFormData;
-        });
-    };
-
-    const renderContractOptions = (connection, siteIndex, connectionIndex, pricing) => {
-        if (!pricing || !pricing.termPrices) return null;
-
-        // Filter out null prices and get available prices
-        const validPrices = Object.entries(pricing.termPrices)
-            .filter(([_, price]) => price !== null)
-            .reduce((acc, [term, price]) => {
-                acc[term] = price;
-                return acc;
-            }, {});
-
-        if (Object.keys(validPrices).length === 0) return null;
-
-        // Find the highest monthly price to calculate savings
-        const basePrice = Math.max(...Object.values(validPrices));
-
-        return (
-            <div className="mt-4">
-                <h4 className="text-sm font-medium text-gray-900 mb-2">Contract Options</h4>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    {Object.entries(validPrices).map(([term, monthlyPrice]) => {
-                        const monthlySavings = basePrice - monthlyPrice;
-                        const isSelected = connection.term === term;
-                        const installCost = pricing.installCosts &&
-                        pricing.installCosts[term] &&
-                        !isNaN(pricing.installCosts[term]) ?
-                            Number(pricing.installCosts[term]) : 0;
-
-                        return (
-                            <div
-                                key={term}
-                                className={`
-                                p-4 rounded-lg cursor-pointer transition-all
-                                ${isSelected
-                                    ? 'border-2 border-blue-500 bg-blue-50'
-                                    : 'border border-gray-200 hover:border-blue-300'}
-                            `}
-                                onClick={() => handleContractTermSelect(siteIndex, connectionIndex, term)}
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="text-sm font-medium">{term} Months</span>
-                                    {isSelected && (
-                                        <CheckCircle className="w-4 h-4 text-blue-500" />
-                                    )}
-                                </div>
-
-                                <div className="text-lg font-bold text-gray-900">
-                                    £{monthlyPrice.toFixed(2)}/mo
-                                </div>
-
-                                {monthlySavings > 0 && (
-                                    <div className="text-sm text-green-600 mt-1">
-                                        Save £{monthlySavings.toFixed(2)}/mo
-                                    </div>
-                                )}
-
-                                {installCost > 0 && (
-                                    <div className="text-sm text-gray-500 mt-1">
-                                        £{installCost.toFixed(2)} install
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        );
     };
 
     const renderSiteConnections = (site, siteIndex) => {
@@ -509,7 +315,7 @@ const NetworkForm = ({ formData, setFormData }) => {
                     const pricing = pricingResults[pricingKey];
 
                     return (
-                        <div key={connection.id} className="border rounded-md p-4 relative">
+                        <div key={connectionIndex} className="border rounded-md p-4 relative">
                             <button
                                 onClick={() => removeConnection(siteIndex, connectionIndex)}
                                 className="absolute top-2 right-2 text-gray-400 hover:text-red-500"
@@ -518,113 +324,143 @@ const NetworkForm = ({ formData, setFormData }) => {
                             </button>
 
                             <div className="space-y-4">
-                                {/* Header section with badges */}
-                                <div className="flex items-center gap-2">
-                                    <span className="bg-blue-500 text-white text-xs font-medium px-2.5 py-0.5 rounded">
-                                        {connection.type}
-                                    </span>
-                                    {connection.speed && getSpeedTierBadge(connection.speed)}
-                                </div>
-
                                 {/* Connection Form */}
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Connection Type
-                                        </label>
-                                        <select
-                                            value={connection.type || ''}
-                                            onChange={(e) => {
-                                                updateConnectionField(siteIndex, connectionIndex, 'type', e.target.value);
-                                                updateConnectionField(siteIndex, connectionIndex, 'speed', '');
-                                            }}
-                                            className="w-full border rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
-                                        >
-                                            <option value="">Select Type</option>
-                                            {connectionTypes.map((type) => (
-                                                <option key={type} value={type}>
-                                                    {type}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Speed
+                                            Speed (Mbps)
                                         </label>
                                         <select
                                             value={connection.speed || ''}
-                                            onChange={(e) =>
-                                                updateConnectionField(siteIndex, connectionIndex, 'speed', e.target.value)
-                                            }
-                                            className="w-full border rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
-                                            disabled={!connection.type}
+                                            onChange={(e) => handleConnectionUpdate(siteIndex, connectionIndex, 'speed', e.target.value)}
+                                            className="w-full border rounded-md px-3 py-2"
                                         >
                                             <option value="">Select Speed</option>
-                                            {connection.type && speedOptions[connection.type]?.map((speed) => (
-                                                <option key={speed} value={speed}>
-                                                    {parseInt(speed, 10) >= 1000
-                                                        ? `${parseInt(speed, 10)/1000}Gbps`
-                                                        : `${speed}Mbps`}
-                                                </option>
+                                            {speedOptions.map((speed) => (
+                                                <option key={speed} value={speed}>{speed}</option>
                                             ))}
                                         </select>
                                     </div>
 
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Current Monthly Cost
+                                            Bearer
                                         </label>
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-2 text-gray-500">£</span>
-                                            <input
-                                                type="number"
-                                                value={connection.proposedCost || ''}
-                                                onChange={(e) =>
-                                                    updateConnectionField(siteIndex, connectionIndex, 'proposedCost', e.target.value)
-                                                }
-                                                className="w-full border rounded-md pl-6 pr-3 py-2 focus:ring-blue-500 focus:border-blue-500"
-                                                placeholder="0.00"
-                                                step="0.01"
-                                                min="0"
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Backup Connection
-                                        </label>
-                                        <div className="flex items-center h-10">
-                                            <label className="flex items-center space-x-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={connection.isBackup || false}
-                                                    onChange={(e) =>
-                                                        updateConnectionField(siteIndex, connectionIndex, 'isBackup', e.target.checked)
-                                                    }
-                                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                                />
-                                                <span className="text-sm text-gray-700">This is a backup connection</span>
-                                            </label>
-                                        </div>
+                                        <select
+                                            value={connection.bearer}
+                                            onChange={(e) => handleConnectionUpdate(siteIndex, connectionIndex, 'bearer', e.target.value)}
+                                            className="w-full border rounded-md px-3 py-2"
+                                        >
+                                            <option value="1000">1000 Mbps</option>
+                                        </select>
                                     </div>
                                 </div>
 
-                                {/* Loading State */}
-                                {isLoading && (
-                                    <div className="flex items-center text-blue-500">
-                                        <Loader2 className="animate-spin h-4 w-4 mr-2" />
-                                        <span className="text-sm">Checking prices...</span>
-                                    </div>
-                                )}
+                                {/* Check Pricing Button */}
+                                <div className="flex justify-end">
+                                    <button
+                                        onClick={() => handlePricingCheck(siteIndex, connectionIndex)}
+                                        disabled={!connection.speed || isLoading}
+                                        className="bg-green-500 text-white px-4 py-2 rounded-md flex items-center gap-2 hover:bg-green-600 transition-colors disabled:opacity-50"
+                                    >
+                                        {isLoading ? (
+                                            <>
+                                                <Loader2 className="animate-spin h-4 w-4" />
+                                                Checking Prices...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <PoundSterling className="h-4 w-4" />
+                                                Check Pricing
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
 
                                 {/* Pricing Results */}
-                                {pricing && (
-                                    <div className="space-y-4">
-                                        {renderContractOptions(connection, siteIndex, connectionIndex, pricing)}
-                                        {renderPricingComparison(connection, pricingKey)}
+                                {pricing && pricing.data.quotes && pricing.data.quotes.length > 0 && (
+                                    <div className="mt-4 space-y-4">
+                                        {/* Best Quote Summary */}
+                                        <div className="bg-green-50 border border-green-100 rounded-lg p-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <CheckCircle className="text-green-500 w-5 h-5" />
+                                                <h4 className="font-medium">Best Quote</h4>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <div className="flex items-center gap-2">
+                                                        {pricing.data.quotes[0].logo && (
+                                                            <img 
+                                                                src={pricing.data.quotes[0].logo} 
+                                                                alt={pricing.data.quotes[0].supplier.name} 
+                                                                className="h-6" 
+                                                            />
+                                                        )}
+                                                        <span className="font-medium">
+                                                            {pricing.data.quotes[0].supplier.name}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-600">
+                                                        {pricing.data.quotes[0].product_name}
+                                                    </p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-lg font-bold">
+                                                        £{pricing.data.quotes[0].monthly_cost.toFixed(2)}
+                                                    </div>
+                                                    <p className="text-sm text-gray-600">per month</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* All Quotes Table */}
+                                        <div className="overflow-x-auto">
+                                            <table className="min-w-full divide-y divide-gray-200">
+                                                <thead className="bg-gray-50">
+                                                    <tr>
+                                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">
+                                                            SUPPLIER
+                                                        </th>
+                                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">
+                                                            PRODUCT
+                                                        </th>
+                                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">
+                                                            MONTHLY
+                                                        </th>
+                                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">
+                                                            INSTALL
+                                                        </th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="bg-white divide-y divide-gray-200">
+                                                    {pricing.data.quotes.map((quote) => (
+                                                        <tr key={quote.uuid} className="hover:bg-gray-50">
+                                                            <td className="px-4 py-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    {quote.logo && (
+                                                                        <img 
+                                                                            src={quote.logo} 
+                                                                            alt={quote.supplier.name} 
+                                                                            className="h-4" 
+                                                                        />
+                                                                    )}
+                                                                    {quote.supplier.name}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-2 text-sm text-gray-600">
+                                                                {quote.product_name}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right">
+                                                                £{quote.monthly_cost.toFixed(2)}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right">
+                                                                £{parseFloat(quote.install_cost).toFixed(2)}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -634,6 +470,126 @@ const NetworkForm = ({ formData, setFormData }) => {
             </div>
         );
     };
+
+    // Handle address selection for a specific site
+    const handleAddressSelect = (siteIndex, address) => {
+        console.log('Selecting address for site:', siteIndex, address);
+
+        const updatedSites = [...formData.sites];
+        updatedSites[siteIndex].address = {
+            uprn: address.DPA.UPRN,
+            address_line_1: address.DPA.ADDRESS,
+            town: address.DPA.POST_TOWN,
+            postcode: address.DPA.POSTCODE,
+            lat: address.DPA.LAT,
+            lon: address.DPA.LNG
+        };
+
+        setFormData({
+            ...formData,
+            sites: updatedSites
+        });
+
+        // Clear the search results after selection
+        setAddressResults([]);
+        setAddressInput(address.DPA.ADDRESS);
+    };
+
+    // Debounced search function
+    const debouncedSearch = useCallback(
+        debounce(async (text) => {
+            if (text.length < 3) return;
+            
+            setIsSearching(true);
+            try {
+                const response = await fetch(
+                    `https://api.os.uk/search/places/v1/find?${new URLSearchParams({
+                        query: text,
+                        key: import.meta.env.VITE_OS_PLACES_API_KEY,
+                        maxresults: '10',
+                        dataset: 'DPA',
+                        output_srs: 'WGS84'
+                    })}`
+                );
+
+                if (!response.ok) {
+                    throw new Error(`OS Places API error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('API response:', data); // Debug log
+                
+                if (data.results && data.results.length > 0) {
+                    setAddressResults(data.results);
+                } else {
+                    setAddressResults([]);
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                setAddressResults([]);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 300),
+        []
+    );
+
+    // Render site address lookup
+    const renderSiteAddress = (site, siteIndex) => (
+        <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+                Site Address
+            </label>
+            <div className="relative">
+                <input
+                    type="text"
+                    value={addressInput}
+                    onChange={(e) => {
+                        setAddressInput(e.target.value);
+                        debouncedSearch(e.target.value);
+                    }}
+                    className="w-full border rounded-md px-3 py-2"
+                    placeholder="Start typing an address..."
+                />
+
+                {/* Loading indicator */}
+                {isSearching && (
+                    <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                        <Loader2 className="animate-spin h-5 w-5 text-gray-400" />
+                    </div>
+                )}
+
+                {/* Address results dropdown */}
+                {addressResults.length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                        <ul className="py-1">
+                            {addressResults.map((result) => (
+                                <li
+                                    key={result.DPA.UPRN}
+                                    onClick={() => handleAddressSelect(siteIndex, result)}
+                                    className="px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer"
+                                >
+                                    <div className="font-medium">{result.DPA.ADDRESS}</div>
+                                    <div className="text-xs text-gray-500">{result.DPA.POSTCODE}</div>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </div>
+
+            {/* Selected address display */}
+            {site.address && (
+                <div className="mt-2 text-sm text-gray-600">
+                    <p className="font-medium">Selected Address:</p>
+                    <p>{site.address.address_line_1}</p>
+                    <p>{site.address.town}</p>
+                    <p>{site.address.postcode}</p>
+                    <p className="text-xs text-gray-500">UPRN: {site.address.uprn}</p>
+                </div>
+            )}
+        </div>
+    );
 
     // Main render
     return (
@@ -648,190 +604,53 @@ const NetworkForm = ({ formData, setFormData }) => {
                 </button>
             </div>
 
-            {/* Error Messages */}
-            {formErrors.length > 0 && (
-                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
-                    <div className="flex items-start gap-2 text-red-600">
-                        <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-                        <div>
-                            <h4 className="font-medium">Please fix the following errors:</h4>
-                            <ul className="text-sm mt-1 list-disc list-inside">
-                                {formErrors.map((error, index) => (
-                                    <li key={index}>{error}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Sites */}
             {formData.sites.map((site, siteIndex) => (
-                <div key={site.id} className="border rounded-lg shadow-sm bg-white">
-                    {/* Site Header */}
-                    <div className="p-4 border-b">
-                        <div className="flex justify-between items-center">
-                            <h3 className="font-bold text-lg flex items-center gap-2">
-                                <Network className="h-5 w-5 text-blue-500" />
-                                Site {siteIndex + 1}
-                            </h3>
-                            <button
-                                onClick={() => removeSite(siteIndex)}
-                                className="text-red-500 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-colors"
-                            >
-                                <Trash2 className="h-5 w-5" />
-                            </button>
+                <div key={siteIndex} className="border rounded-lg p-4 space-y-4">
+                    <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-2">
+                            <Network className="w-5 h-5 text-gray-500" />
+                            <h3 className="font-medium">Site {siteIndex + 1}</h3>
                         </div>
-
-                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">
-                                    Site Name*
-                                </label>
-                                <input
-                                    type="text"
-                                    value={site.name || ''}
-                                    onChange={(e) => {
-                                        const updatedSites = [...formData.sites];
-                                        updatedSites[siteIndex] = {
-                                            ...site,
-                                            name: e.target.value
-                                        };
-                                        setFormData({ ...formData, sites: updatedSites });
-                                        setFormErrors(validateSites(updatedSites));
-                                    }}
-                                    className="w-full border rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
-                                    placeholder="e.g., Head Office, Warehouse, Branch Location"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">
-                                    Site Address
-                                </label>
-                                <ZenAddressLookup
-                                    value={site.address}
-                                    onSelect={(address) => {
-                                        addDebugLog('Address selected', address);
-                                        const updatedSites = [...formData.sites];
-                                        updatedSites[siteIndex].address = address;
-                                        setFormData({ ...formData, sites: updatedSites });
-                                    }}
-                                />
-                            </div>
-                        </div>
+                        <button
+                            onClick={() => removeSite(siteIndex)}
+                            className="text-red-500 hover:text-red-700"
+                        >
+                            <Trash2 className="w-5 h-5" />
+                        </button>
                     </div>
 
-                    {/* Site Content */}
-                    <div className="p-4">
-                        <div className="flex justify-between items-center mb-4">
-                            <h4 className="font-semibold text-gray-700">Connections</h4>
-                            <button
-                                onClick={() => addConnection(siteIndex)}
-                                className="text-blue-500 hover:text-blue-600 text-sm flex items-center gap-1"
-                            >
-                                <Plus className="h-4 w-4" /> Add Connection
-                            </button>
-                        </div>
+                    {renderSiteAddress(site, siteIndex)}
 
-                        {renderSiteConnections(site, siteIndex)}
+                    {renderSiteConnections(site, siteIndex)}
 
-                        {site.connections.length > 0 && (
-                            <div className="mt-6 flex flex-col sm:flex-row gap-2 justify-between items-center border-t pt-4">
-                                <div className="text-sm text-gray-500">
-                                    {site.connections.length} connection{site.connections.length !== 1 ? 's' : ''} configured
-                                    {site.connections.filter(c => c.isBackup).length > 0 &&
-                                        ` (${site.connections.filter(c => c.isBackup).length} backup)`
-                                    }
-                                </div>
-
-                                <button
-                                    onClick={() => handleCheckPricing(siteIndex)}
-                                    className={`
-                                        flex items-center px-4 py-2 rounded-md text-white
-                                        ${loadingIndex === siteIndex
-                                        ? 'bg-blue-400 cursor-not-allowed'
-                                        : 'bg-blue-500 hover:bg-blue-600'}
-                                        transition-colors
-                                    `}
-                                    disabled={loadingIndex === siteIndex || !site.address?.postcode}
-                                >
-                                    {loadingIndex === siteIndex ? (
-                                        <>
-                                            <Loader2 className="animate-spin h-4 w-4 mr-2" />
-                                            Checking All Prices...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <TrendingDown className="h-4 w-4 mr-2" />
-                                            Check All Prices
-                                        </>
-                                    )}
-                                </button>
-                            </div>
-                        )}
-
-                        {/* API Error Display */}
-                        {apiError && (
-                            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
-                                <div className="flex items-start gap-2 text-red-600">
-                                    <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-                                    <div>
-                                        <h4 className="font-medium">Error checking prices</h4>
-                                        <p className="text-sm mt-1">{apiError}</p>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Site Address Footer */}
-                    {site.address && (
-                        <div className="bg-gray-50 px-4 py-3 border-t">
-                            <div className="flex items-center text-sm text-gray-600">
-                                <MapPin className="h-4 w-4 mr-2" />
-                                {site.address.building} {site.address.street}, {site.address.city}, {site.address.postcode}
-                            </div>
-                        </div>
-                    )}
+                    <button
+                        onClick={() => addConnection(siteIndex)}
+                        className="text-blue-500 hover:text-blue-700 flex items-center"
+                    >
+                        <Plus className="w-4 h-4 mr-1" />
+                        Add Connection
+                    </button>
                 </div>
             ))}
 
-            {/* Empty State */}
-            {formData.sites.length === 0 && (
-                <div className="text-center py-12 bg-white rounded-lg border-2 border-dashed">
-                    <Network className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">No sites added yet</h3>
-                    <p className="text-gray-500 mb-4">Add your first site to begin configuring network connections</p>
-                    <button
-                        onClick={addSite}
-                        className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                    >
-                        <Plus className="h-4 w-4 mr-1" />
-                        Add Your First Site
-                    </button>
+            {apiError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5" />
+                    {apiError}
                 </div>
             )}
 
-            {/* Debug Panel */}
-            {debugLogs.length > 0 && (
-                <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                    <h3 className="font-medium mb-2">Debug Logs</h3>
-                    <div className="max-h-40 overflow-auto">
-                        {debugLogs.map((log, index) => (
-                            <div key={index} className="text-sm mb-2">
-                                <div className="text-gray-500">{log.timestamp}</div>
-                                <div>{log.message}</div>
-                                {log.data && (
-                                    <pre className="text-xs bg-gray-100 p-2 rounded mt-1 overflow-auto">
-                                        {log.data}
-                                    </pre>
-                                )}
-                            </div>
-                        ))}
+            {/* Debug Logs Section */}
+            <div className="mt-8 space-y-2">
+                <h3 className="font-medium">Debug Logs</h3>
+                {debugLogs.map((log, index) => (
+                    <div key={index} className="text-sm font-mono bg-gray-50 p-2 rounded">
+                        <div className="text-gray-500">{log.timestamp}</div>
+                        <div>{log.message}</div>
+                        {log.data && <pre className="text-xs mt-1">{log.data}</pre>}
                     </div>
-                </div>
-            )}
+                ))}
+            </div>
         </div>
     );
 };
