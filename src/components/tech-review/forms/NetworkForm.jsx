@@ -1,7 +1,12 @@
-﻿import React, { useState, useCallback } from 'react';
+﻿import React, { useState, useCallback, useEffect } from 'react';
 import { Trash2, Network, AlertCircle, MapPin, Plus, PoundSterling, Loader2, CheckCircle, TrendingDown } from 'lucide-react';
 import AddressLookup from './AddressLookup';
 import debounce from 'lodash/debounce';
+import { TextField, Button, Grid, Typography, CircularProgress } from '@mui/material';
+import { Card, Divider, Chip } from '@mui/material';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import SpeedIcon from '@mui/icons-material/Speed';
+import SavingsIcon from '@mui/icons-material/Savings';
 
 // Constants
 const SPEED_TIERS = {
@@ -63,6 +68,13 @@ const NetworkForm = ({ formData, setFormData }) => {
     const [selectedAddress, setSelectedAddress] = useState(null);
     const [isSearching, setIsSearching] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [quotes, setQuotes] = useState([]);
+    const [currentService, setCurrentService] = useState({
+        speed: '',
+        price: '',
+        provider: ''
+    });
 
     // Utility functions
     const addDebugLog = (message, data = null) => {
@@ -77,103 +89,39 @@ const NetworkForm = ({ formData, setFormData }) => {
     // API interaction functionsS
     const checkITSPricing = async (site, connection) => {
         try {
-            // First get coordinates from OS API
-            const geocodeResponse = await fetch(
-                `https://api.os.uk/search/places/v1/find?${new URLSearchParams({
-                    query: `${site.address.address_line_1}, ${site.address.postcode}`,
-                    key: import.meta.env.VITE_OS_PLACES_API_KEY,
-                    maxresults: '1',
-                    output_srs: 'WGS84'
-                })}`
-            );
-
-            const geocodeData = await geocodeResponse.json();
-            console.log('Geocode response:', geocodeData);
-
-            if (!geocodeData.results?.[0]) {
-                throw new Error('Could not geocode address');
-            }
-
-            // Clean up address data - more precise formatting
-            const cleanAddress = site.address.address_line_1
-                .split(',')[1]  // Get part after first comma
-                .trim()         // Remove whitespace
-                .replace(/SHEFFIELD/i, '')  // Remove SHEFFIELD
-                .replace(/S3 8JY/i, '')     // Remove postcode
-                .replace(/,/g, '')          // Remove any remaining commas
-                .trim()                     // Final trim
-                .replace(/^(\d+)\s*,?\s*(.*)$/i, '$1 $2')  // Format number and street
-                .replace(/\s+/g, ' ');      // Normalize spaces
-
-            // Format request payload
             const requestPayload = {
                 postcode: site.address.postcode,
-                address_line_1: cleanAddress,
-                town: "Sheffield",          // Hardcoded proper case
-                latitude: geocodeData.results[0].DPA.LAT,
-                longitude: geocodeData.results[0].DPA.LNG,
+                address_line_1: site.address.address_line_1,
+                town: site.address.town,
+                latitude: site.address.lat,
+                longitude: site.address.lon,
                 term_months: [36, 60],
                 its_only: false,
-                connections: [
-                    {
-                        bearer: parseInt(site.connections[0].speed, 10),
-                        speed: parseInt(site.connections[0].speed, 10)
-                    }
-                ]
+                connections: [{
+                    bearer: parseInt(connection.speed, 10),
+                    speed: parseInt(connection.speed, 10)
+                }]
             };
 
-            console.log('Request payload:', requestPayload);
+            console.log('Sending request:', requestPayload);
 
-            console.log('🔍 POST Request:', {
-                url: '/api/its/availability',
-                payload: requestPayload
-            });
-
-            const searchResponse = await fetch('/api/its/availability', {
+            const response = await fetch('/api/its/availability', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Accept': 'application/json'
                 },
                 body: JSON.stringify(requestPayload)
             });
 
-            const searchData = await searchResponse.json();
-            const searchId = searchData?.data?.uuid;
-            
-            console.log('🔑 Search ID:', searchId);
-
-            // Polling logic
-            let attempts = 0;
-            const maxAttempts = 30;  // 5 minutes total
-            let previousQuoteCount = 0;
-            let noNewQuotesCount = 0;
-
-            while (attempts < maxAttempts) {
-                console.log(`📊 GET Request attempt ${attempts + 1}/${maxAttempts}`);
-                
-                const resultsResponse = await fetch(`/api/its/results/${searchId}`);
-                const resultsData = await resultsResponse.json();
-                
-                const currentQuoteCount = resultsData.data.quotes?.length || 0;
-                const newQuotes = currentQuoteCount - previousQuoteCount;
-                
-                if (newQuotes === 0) noNewQuotesCount++; else noNewQuotesCount = 0;
-                previousQuoteCount = currentQuoteCount;
-
-                // Exit if we have quotes and no new ones for 3 attempts
-                if (currentQuoteCount > 0 && noNewQuotesCount >= 3) {
-                    return resultsData;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                attempts++;
+            if (!response.ok) {
+                throw new Error(`API returned status ${response.status}`);
             }
 
-            throw new Error('Timeout waiting for quotes');
+            const data = await response.json();
+            return data;
 
         } catch (error) {
-            console.error('❌ Error:', error);
+            console.error('Failed to get pricing:', error);
             throw error;
         }
     };
@@ -289,6 +237,137 @@ const NetworkForm = ({ formData, setFormData }) => {
         };
         
         setFormData({ ...formData, sites: updatedSites });
+    };
+
+    const renderPricingComparison = (site, siteIndex, connectionIndex, pricing) => {
+        if (!pricing?.data?.quotes?.length) return null;
+
+        const quotes = pricing.data.quotes;
+        
+        // Find like-for-like quote
+        const likeForLikeQuote = quotes.find(quote => 
+            quote.speed === parseInt(currentService.speed) &&
+            quote.term_months === 36
+        );
+
+        // Find optimized quote
+        const optimizedQuote = quotes.reduce((best, current) => {
+            if (!best) return current;
+            if (current.speed > best.speed) return current;
+            if (current.speed === best.speed && current.monthly_cost < best.monthly_cost) return current;
+            return best;
+        }, null);
+
+        return (
+            <Grid container spacing={3} sx={{ mt: 3 }}>
+                {/* Current Service */}
+                <Grid item xs={12} md={4}>
+                    <Card sx={{ p: 3, height: '100%', bgcolor: 'grey.50' }}>
+                        <Typography variant="h6" gutterBottom>
+                            Current Service
+                        </Typography>
+                        <Divider sx={{ my: 2 }} />
+                        <TextField
+                            fullWidth
+                            label="Current Speed (Mbps)"
+                            value={currentService.speed}
+                            onChange={(e) => setCurrentService(prev => ({ ...prev, speed: e.target.value }))}
+                            sx={{ mb: 2 }}
+                        />
+                        <TextField
+                            fullWidth
+                            label="Current Monthly Price"
+                            value={currentService.price}
+                            onChange={(e) => setCurrentService(prev => ({ ...prev, price: e.target.value }))}
+                            sx={{ mb: 2 }}
+                        />
+                        <TextField
+                            fullWidth
+                            label="Current Provider"
+                            value={currentService.provider}
+                            onChange={(e) => setCurrentService(prev => ({ ...prev, provider: e.target.value }))}
+                        />
+                    </Card>
+                </Grid>
+
+                {/* Like for Like Comparison */}
+                <Grid item xs={12} md={4}>
+                    <Card sx={{ p: 3, height: '100%', bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+                        <Typography variant="h6" gutterBottom>
+                            <CompareArrowsIcon sx={{ mr: 1 }} />
+                            Like-for-Like Option
+                        </Typography>
+                        <Divider sx={{ my: 2, borderColor: 'primary.contrastText' }} />
+                        {likeForLikeQuote && currentService.price ? (
+                            <>
+                                <Chip 
+                                    label={`${Math.round((currentService.price - likeForLikeQuote.monthly_cost) / currentService.price * 100)}% Savings`}
+                                    color="success"
+                                    sx={{ mb: 2 }}
+                                />
+                                <Typography variant="body1" paragraph>
+                                    Speed: {likeForLikeQuote.speed}Mbps
+                                </Typography>
+                                <Typography variant="body1" paragraph>
+                                    Monthly Cost: £{likeForLikeQuote.monthly_cost.toFixed(2)}
+                                </Typography>
+                                <Typography variant="body1" paragraph>
+                                    Provider: {likeForLikeQuote.supplier.name}
+                                </Typography>
+                                <Typography variant="body1">
+                                    Term: {likeForLikeQuote.term_months} months
+                                </Typography>
+                            </>
+                        ) : (
+                            <Typography>
+                                {currentService.price ? 'No like-for-like option available' : 'Enter your current service details'}
+                            </Typography>
+                        )}
+                    </Card>
+                </Grid>
+
+                {/* Optimized Option */}
+                <Grid item xs={12} md={4}>
+                    <Card sx={{ p: 3, height: '100%', bgcolor: 'success.light', color: 'success.contrastText' }}>
+                        <Typography variant="h6" gutterBottom>
+                            <SpeedIcon sx={{ mr: 1 }} />
+                            Optimized Option
+                        </Typography>
+                        <Divider sx={{ my: 2, borderColor: 'success.contrastText' }} />
+                        {optimizedQuote && (
+                            <>
+                                <Chip 
+                                    icon={<SavingsIcon />}
+                                    label="Best Value"
+                                    color="warning"
+                                    sx={{ mb: 2 }}
+                                />
+                                <Typography variant="body1" paragraph>
+                                    Speed: {optimizedQuote.speed}Mbps
+                                    {currentService.speed && optimizedQuote.speed > parseInt(currentService.speed) && (
+                                        <Chip 
+                                            size="small"
+                                            label={`${Math.round(optimizedQuote.speed/parseInt(currentService.speed))}x Faster`}
+                                            color="warning"
+                                            sx={{ ml: 1 }}
+                                        />
+                                    )}
+                                </Typography>
+                                <Typography variant="body1" paragraph>
+                                    Monthly Cost: £{optimizedQuote.monthly_cost.toFixed(2)}
+                                </Typography>
+                                <Typography variant="body1" paragraph>
+                                    Provider: {optimizedQuote.supplier.name}
+                                </Typography>
+                                <Typography variant="body1">
+                                    Term: {optimizedQuote.term_months} months
+                                </Typography>
+                            </>
+                        )}
+                    </Card>
+                </Grid>
+            </Grid>
+        );
     };
 
     const renderSiteConnections = (site, siteIndex) => {
@@ -591,6 +670,66 @@ const NetworkForm = ({ formData, setFormData }) => {
         </div>
     );
 
+    useEffect(() => {
+        // Initialize current service from site data if available
+        if (formData.currentService) {
+            setCurrentService({
+                speed: formData.currentSpeed || '',
+                price: formData.currentPrice || '',
+                provider: formData.currentService || ''
+            });
+        }
+    }, [formData]);
+
+    const handleInputChange = (e) => {
+        setCurrentService({ ...currentService, [e.target.name]: e.target.value });
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            const response = await fetch('/api/its/availability', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    postcode: formData.address.postcode,
+                    address_line_1: formData.address.address_line_1,
+                    town: formData.address.town,
+                    latitude: formData.address.lat,
+                    longitude: formData.address.lon,
+                    connections: [{ speed: parseInt(currentService.speed, 10), bearer: parseInt(currentService.speed, 10) }]
+                }),
+            });
+            const data = await response.json();
+            if (data.data && data.data.uuid) {
+                const quotesResponse = await fetch(`/api/its/results/${data.data.uuid}`);
+                const quotesData = await quotesResponse.json();
+                setQuotes(quotesData.data.quotes || []);
+            }
+        } catch (error) {
+            console.error('Error fetching quotes:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Find like-for-like quote
+    const likeForLikeQuote = quotes.find(quote => 
+        quote.speed === parseInt(currentService.speed) &&
+        quote.term_months === 36  // Assuming 36 months is standard
+    );
+
+    // Find optimized quote (highest speed with lowest price)
+    const optimizedQuote = quotes.reduce((best, current) => {
+        if (!best) return current;
+        if (current.speed > best.speed) return current;
+        if (current.speed === best.speed && current.monthly_cost < best.monthly_cost) return current;
+        return best;
+    }, null);
+
     // Main render
     return (
         <div className="space-y-6">
@@ -651,6 +790,144 @@ const NetworkForm = ({ formData, setFormData }) => {
                     </div>
                 ))}
             </div>
+
+            <form onSubmit={handleSubmit}>
+                <Grid container spacing={3}>
+                    <Grid item xs={12}>
+                        <Typography variant="h6">Current Network Service</Typography>
+                    </Grid>
+                    <Grid item xs={12} sm={4}>
+                        <TextField
+                            fullWidth
+                            label="Current Speed (Mbps)"
+                            name="speed"
+                            value={currentService.speed}
+                            onChange={handleInputChange}
+                        />
+                    </Grid>
+                    <Grid item xs={12} sm={4}>
+                        <TextField
+                            fullWidth
+                            label="Current Monthly Price"
+                            name="price"
+                            value={currentService.price}
+                            onChange={handleInputChange}
+                        />
+                    </Grid>
+                    <Grid item xs={12} sm={4}>
+                        <TextField
+                            fullWidth
+                            label="Current Provider"
+                            name="provider"
+                            value={currentService.provider}
+                            onChange={handleInputChange}
+                        />
+                    </Grid>
+                    <Grid item xs={12}>
+                        <Button type="submit" variant="contained" color="primary" disabled={loading}>
+                            {loading ? <CircularProgress size={24} /> : 'Get Quotes'}
+                        </Button>
+                    </Grid>
+                </Grid>
+
+                {quotes.length > 0 && (
+                    <Grid container spacing={3} sx={{ mt: 3 }}>
+                        {/* Current Service */}
+                        <Grid item xs={12} md={4}>
+                            <Card sx={{ p: 3, height: '100%', bgcolor: 'grey.50' }}>
+                                <Typography variant="h6" gutterBottom>
+                                    Current Service
+                                </Typography>
+                                <Divider sx={{ my: 2 }} />
+                                <Typography variant="body1">
+                                    Speed: {currentService.speed}Mbps
+                                </Typography>
+                                <Typography variant="body1">
+                                    Monthly Cost: £{currentService.price}
+                                </Typography>
+                                <Typography variant="body1">
+                                    Provider: {currentService.provider}
+                                </Typography>
+                            </Card>
+                        </Grid>
+
+                        {/* Like for Like Comparison */}
+                        <Grid item xs={12} md={4}>
+                            <Card sx={{ p: 3, height: '100%', bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+                                <Typography variant="h6" gutterBottom>
+                                    <CompareArrowsIcon sx={{ mr: 1 }} />
+                                    Like-for-Like Option
+                                </Typography>
+                                <Divider sx={{ my: 2, borderColor: 'primary.contrastText' }} />
+                                {likeForLikeQuote ? (
+                                    <>
+                                        <Chip 
+                                            label={`${Math.round((currentService.price - likeForLikeQuote.monthly_cost) / currentService.price * 100)}% Savings`}
+                                            color="success"
+                                            sx={{ mb: 2 }}
+                                        />
+                                        <Typography variant="body1">
+                                            Speed: {likeForLikeQuote.speed}Mbps
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            Monthly Cost: £{likeForLikeQuote.monthly_cost}
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            Provider: {likeForLikeQuote.supplier.name}
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            Term: {likeForLikeQuote.term_months} months
+                                        </Typography>
+                                    </>
+                                ) : (
+                                    <Typography>No like-for-like option available</Typography>
+                                )}
+                            </Card>
+                        </Grid>
+
+                        {/* Optimized Option */}
+                        <Grid item xs={12} md={4}>
+                            <Card sx={{ p: 3, height: '100%', bgcolor: 'success.light', color: 'success.contrastText' }}>
+                                <Typography variant="h6" gutterBottom>
+                                    <SpeedIcon sx={{ mr: 1 }} />
+                                    Optimized Option
+                                </Typography>
+                                <Divider sx={{ my: 2, borderColor: 'success.contrastText' }} />
+                                {optimizedQuote && (
+                                    <>
+                                        <Chip 
+                                            icon={<SavingsIcon />}
+                                            label="Best Value"
+                                            color="warning"
+                                            sx={{ mb: 2 }}
+                                        />
+                                        <Typography variant="body1">
+                                            Speed: {optimizedQuote.speed}Mbps
+                                            {optimizedQuote.speed > parseInt(currentService.speed) && (
+                                                <Chip 
+                                                    size="small"
+                                                    label={`${Math.round(optimizedQuote.speed/parseInt(currentService.speed))}x Faster`}
+                                                    color="warning"
+                                                    sx={{ ml: 1 }}
+                                                />
+                                            )}
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            Monthly Cost: £{optimizedQuote.monthly_cost}
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            Provider: {optimizedQuote.supplier.name}
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            Term: {optimizedQuote.term_months} months
+                                        </Typography>
+                                    </>
+                                )}
+                            </Card>
+                        </Grid>
+                    </Grid>
+                )}
+            </form>
         </div>
     );
 };
