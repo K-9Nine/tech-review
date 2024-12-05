@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react';
 import { Trash2, Plus, Loader2, PoundSterling } from 'lucide-react';
-import AddressLookup from './AddressLookup';
+import { AddressLookup } from '../../../components/AddressLookup';
 import PricingComparison from './PricingComparison';
 
 // Speed options array
