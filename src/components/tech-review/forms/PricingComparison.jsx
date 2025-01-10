@@ -1,158 +1,96 @@
 import React from 'react';
-import { Card, Grid, Typography, Divider, Chip } from '@mui/material';
-import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
-import SpeedIcon from '@mui/icons-material/Speed';
-import SavingsIcon from '@mui/icons-material/Savings';
-import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 
-const COLORS = {
-    primary: 'rgb(73,166,56)',     // Green
-    secondary: 'rgb(39,136,159)',  // Blue
-    black: 'rgb(0,0,0)',
-    neonBlue: 'rgb(92,252,247)',
-    neonGreen: 'rgb(108,250,161)',
-    white: 'rgb(255,255,255)'
-};
+const PricingComparison = ({ quotes, onNetDistance, onNetNearest }) => {
+    console.log('PricingComparison Component Rendered');
+    console.log('Props received:', { quotes, onNetDistance, onNetNearest });
 
-export const PricingComparison = ({ currentService, quotes }) => {
-    if (!quotes?.length) return null;
+    // Basic validation with detailed error messages
+    if (!quotes) {
+        console.error('Quotes prop is undefined');
+        return <div className="text-red-500 p-4">Error: No quotes data provided</div>;
+    }
 
-    // Find like-for-like quote
-    const likeForLikeQuote = quotes.find(quote => 
-        quote.speed === parseInt(currentService.speed) &&
-        quote.term_months === 36
-    );
+    if (!Array.isArray(quotes)) {
+        console.error('Quotes prop is not an array:', quotes);
+        return <div className="text-red-500 p-4">Error: Invalid quotes data format</div>;
+    }
 
-    // Find optimized quote (highest speed with best value)
-    const optimizedQuote = quotes.reduce((best, current) => {
-        if (!best) return current;
-        const bestValue = best.speed / best.monthly_cost;
-        const currentValue = current.speed / current.monthly_cost;
-        return currentValue > bestValue ? current : best;
-    }, null);
+    if (quotes.length === 0) {
+        return <div className="text-gray-500 p-4">No quotes available for this connection</div>;
+    }
 
-    const cardStyle = (color) => ({
-        p: 3,
-        height: '100%',
-        bgcolor: COLORS.black,
-        color: COLORS.white,
-        border: `1px solid ${color}`,
-        boxShadow: `0 0 10px ${color}`,
-        transition: 'transform 0.2s',
-        '&:hover': {
-            transform: 'scale(1.02)',
+    // Group quotes by term length
+    const quotesByTerm = quotes.reduce((acc, quote) => {
+        const term = quote.term_months || 'Unknown';
+        if (!acc[term]) {
+            acc[term] = [];
         }
-    });
+        acc[term].push(quote);
+        return acc;
+    }, {});
 
     return (
-        <Grid container spacing={3} sx={{ mt: 3 }}>
-            {/* Current Service */}
-            <Grid item xs={12} md={4}>
-                <Card sx={cardStyle(COLORS.neonBlue)}>
-                    <Typography variant="h6" gutterBottom sx={{ color: COLORS.neonBlue }}>
-                        <TrendingUpIcon sx={{ mr: 1 }} />
-                        Current Service
-                    </Typography>
-                    <Divider sx={{ my: 2, borderColor: COLORS.neonBlue }} />
-                    <Typography variant="body1" paragraph>
-                        Speed: {currentService.speed}Mbps
-                    </Typography>
-                    <Typography variant="body1" paragraph>
-                        Monthly Cost: £{currentService.price}
-                    </Typography>
-                    <Typography variant="body1">
-                        Provider: {currentService.provider}
-                    </Typography>
-                </Card>
-            </Grid>
+        <div className="mt-4 border rounded-lg p-4">
+            <h3 className="text-lg font-medium mb-4">Detailed Pricing</h3>
+            
+            {Object.entries(quotesByTerm).map(([term, termQuotes]) => (
+                <div key={term} className="mb-6">
+                    <h4 className="font-medium text-gray-700 mb-2">{term} Month Terms</h4>
+                    <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+                        {termQuotes
+                            .sort((a, b) => a.monthly_cost - b.monthly_cost)
+                            .map(quote => (
+                                <div 
+                                    key={quote.uuid}
+                                    className="border rounded-lg p-4 bg-white shadow-sm hover:shadow-md transition-shadow"
+                                >
+                                    <div className="flex items-center gap-2 mb-3">
+                                        {quote.logo && (
+                                            <img 
+                                                src={quote.logo} 
+                                                alt={quote.supplier} 
+                                                className="h-6"
+                                                onError={(e) => {
+                                                    console.error('Failed to load logo:', quote.logo);
+                                                    e.target.style.display = 'none';
+                                                }}
+                                            />
+                                        )}
+                                        <span className="font-medium">{quote.supplier}</span>
+                                    </div>
+                                    
+                                    <div className="space-y-2">
+                                        <p className="text-sm text-gray-600">{quote.product_name}</p>
+                                        <p className="text-xl font-bold">
+                                            £{typeof quote.monthly_cost === 'number' ? 
+                                                quote.monthly_cost.toFixed(2) : 
+                                                quote.monthly_cost}/month
+                                        </p>
+                                        <p className="text-sm text-gray-500">
+                                            Install: £{quote.install_cost}
+                                        </p>
+                                        {quote.estimated_ecc && quote.estimated_ecc !== "0.00" && (
+                                            <p className="text-sm text-amber-600">
+                                                Est. ECC: £{quote.estimated_ecc}
+                                            </p>
+                                        )}
+                                    </div>
 
-            {/* Like for Like */}
-            <Grid item xs={12} md={4}>
-                <Card sx={cardStyle(COLORS.primary)}>
-                    <Typography variant="h6" gutterBottom sx={{ color: COLORS.primary }}>
-                        <CompareArrowsIcon sx={{ mr: 1 }} />
-                        Like-for-Like Option
-                    </Typography>
-                    <Divider sx={{ my: 2, borderColor: COLORS.primary }} />
-                    {likeForLikeQuote ? (
-                        <>
-                            <Chip 
-                                label={`${Math.round((currentService.price - likeForLikeQuote.monthly_cost) / currentService.price * 100)}% Savings`}
-                                sx={{ 
-                                    mb: 2, 
-                                    bgcolor: COLORS.neonGreen,
-                                    color: COLORS.black,
-                                    fontWeight: 'bold'
-                                }}
-                            />
-                            <Typography variant="body1" paragraph>
-                                Speed: {likeForLikeQuote.speed}Mbps
-                            </Typography>
-                            <Typography variant="body1" paragraph>
-                                Monthly Cost: £{likeForLikeQuote.monthly_cost.toFixed(2)}
-                            </Typography>
-                            <Typography variant="body1" paragraph>
-                                Provider: {likeForLikeQuote.supplier.name}
-                            </Typography>
-                            <Typography variant="body1">
-                                Term: {likeForLikeQuote.term_months} months
-                            </Typography>
-                        </>
-                    ) : (
-                        <Typography>No like-for-like option available</Typography>
-                    )}
-                </Card>
-            </Grid>
-
-            {/* Optimized Option */}
-            <Grid item xs={12} md={4}>
-                <Card sx={cardStyle(COLORS.secondary)}>
-                    <Typography variant="h6" gutterBottom sx={{ color: COLORS.secondary }}>
-                        <SpeedIcon sx={{ mr: 1 }} />
-                        Best Value Option
-                    </Typography>
-                    <Divider sx={{ my: 2, borderColor: COLORS.secondary }} />
-                    {optimizedQuote && (
-                        <>
-                            <Chip 
-                                icon={<SavingsIcon />}
-                                label="Optimized Speed/Cost"
-                                sx={{ 
-                                    mb: 2, 
-                                    bgcolor: COLORS.neonGreen,
-                                    color: COLORS.black,
-                                    fontWeight: 'bold'
-                                }}
-                            />
-                            <Typography variant="body1" paragraph>
-                                Speed: {optimizedQuote.speed}Mbps
-                                {currentService.speed && optimizedQuote.speed > parseInt(currentService.speed) && (
-                                    <Chip 
-                                        size="small"
-                                        label={`${Math.round(optimizedQuote.speed/parseInt(currentService.speed))}x Faster`}
-                                        sx={{ 
-                                            ml: 1, 
-                                            bgcolor: COLORS.neonBlue,
-                                            color: COLORS.black,
-                                            fontWeight: 'bold'
-                                        }}
-                                    />
-                                )}
-                            </Typography>
-                            <Typography variant="body1" paragraph>
-                                Monthly Cost: £{optimizedQuote.monthly_cost.toFixed(2)}
-                            </Typography>
-                            <Typography variant="body1" paragraph>
-                                Provider: {optimizedQuote.supplier.name}
-                            </Typography>
-                            <Typography variant="body1">
-                                Term: {optimizedQuote.term_months} months
-                            </Typography>
-                        </>
-                    )}
-                </Card>
-            </Grid>
-        </Grid>
+                                    {quote.additionalInformation?.length > 0 && (
+                                        <div className="mt-3 pt-3 border-t">
+                                            {quote.additionalInformation.map((info, idx) => (
+                                                <p key={idx} className="text-sm text-gray-500">
+                                                    {info.title}: {info.content}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                    </div>
+                </div>
+            ))}
+        </div>
     );
 };
 

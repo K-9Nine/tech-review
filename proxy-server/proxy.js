@@ -11,6 +11,11 @@ if (!process.env.OS_API_KEY) {
   process.exit(1);
 }
 
+if (!process.env.ITS_AUTH_TOKEN) {
+  console.error('ITS_AUTH_TOKEN is not set in environment variables');
+  process.exit(1);
+}
+
 const app = express();
 
 // Enable CORS for all routes
@@ -93,106 +98,132 @@ app.use((req, res, next) => {
   next();
 });
 
-// Update the address lookup handler
-app.get('/api/address-lookup', async (req, res) => {
-  const timestamp = new Date().toISOString();
-  const search = req.query.search;
-  const apiKey = process.env.OS_API_KEY;
-
-  console.log(`[${timestamp}] [${req.requestId}] Processing address lookup:`, {
-    search,
-    headers: req.headers
-  });
-
-  try {
-    const postcodeRegex = /^[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}$/i;
-    const isPostcode = postcodeRegex.test(search);
-    
-    // Construct parameters according to API docs
-    const params = new URLSearchParams({
-      key: apiKey,
-      dataset: 'DPA,LPI',
-      maxresults: '100',
-      output_srs: 'EPSG:27700'
-    });
-
-    // Add search parameter based on type
-    if (isPostcode) {
-      params.set('postcode', search);
-    } else {
-      params.set('query', search);
+// Add this function at the top of the file
+function bngToLatLong(easting, northing) {
+    // Validate inputs
+    if (!easting || !northing) {
+        console.warn('Invalid coordinates:', { easting, northing });
+        return { lat: null, lng: null };
     }
 
-    const baseUrl = 'https://api.os.uk/search/places/v1';
-    const endpoint = isPostcode ? 'postcode' : 'find';
-    const url = `${baseUrl}/${endpoint}?${params.toString()}`;
+    try {
+        // Constants for the OSGB36 to WGS84 transformation
+        const a = 6377563.396;  // Semi-major axis
+        const b = 6356256.909;  // Semi-minor axis
+        const e2 = (a*a - b*b)/(a*a);
+        const n = (a-b)/(a+b);
+        const n0 = -100000;
+        const e0 = 400000;
+        const f0 = 0.9996012717;
+        const φ0 = 49 * Math.PI/180;  // Origin latitude
+        const λ0 = -2 * Math.PI/180;  // Origin longitude
 
-    console.log(`[${timestamp}] Making request to:`, url.replace(apiKey, 'REDACTED'));
+        // Normalize coordinates
+        const E = easting - e0;
+        const N = northing - n0;
 
-    const response = await axios.get(url, {
-      headers: {
-        'Accept': 'application/json'
-      }
-    });
+        // Initial value
+        let φ = φ0;
+        let M = 0;
 
-    console.log(`[${timestamp}] OS API Response Status:`, response.status);
+        do {
+            φ = (N - M)/(a * f0) + φ;
+            
+            M = (1 + n + (5/4)*Math.pow(n,2) + (5/4)*Math.pow(n,3)) * (φ - φ0)
+                - (3*n + 3*Math.pow(n,2) + (21/8)*Math.pow(n,3)) * Math.sin(φ - φ0) * Math.cos(φ + φ0)
+                + ((15/8)*Math.pow(n,2) + (15/8)*Math.pow(n,3)) * Math.sin(2*(φ - φ0)) * Math.cos(2*(φ + φ0))
+                - (35/24)*Math.pow(n,3) * Math.sin(3*(φ - φ0)) * Math.cos(3*(φ + φ0));
+        } while (N - M >= 0.00001);  // Accuracy threshold
 
-    // Transform the response
-    const addresses = response.data.results?.map(result => {
-      const address = result.DPA || result.LPI;
-      if (!address) return null;
+        const ν = a * f0 * Math.pow(1 - e2 * Math.pow(Math.sin(φ),2), -0.5);
+        const ρ = a * f0 * (1 - e2) * Math.pow(1 - e2 * Math.pow(Math.sin(φ),2), -1.5);
+        const η2 = ν/ρ - 1;
 
-      // Filter out HISTORICAL addresses unless specifically requested
-      if (address.STATUS === 'HISTORICAL' && !req.query.includeHistorical) {
-        return null;
-      }
+        const tanφ = Math.tan(φ);
+        const tan2φ = Math.pow(tanφ,2);
+        const tan4φ = Math.pow(tanφ,4);
+        const tan6φ = Math.pow(tanφ,6);
 
-      return {
-        UPRN: address.UPRN,
-        ADDRESS: address.ADDRESS.replace(/,\s+/g, ', '), // Clean up spacing in address
-        POST_TOWN: address.POST_TOWN || address.TOWN_NAME,
-        POSTCODE: address.POSTCODE || address.POSTCODE_LOCATOR,
-        COORDINATES: {
-          lat: address.Y_COORDINATE,
-          lng: address.X_COORDINATE
-        },
-        STATUS: address.STATUS,
-        CLASSIFICATION: address.CLASSIFICATION_CODE_DESCRIPTION,
-        TYPE: result.DPA ? 'Postal' : 'Location'
-      };
-    }).filter(Boolean);
+        const secφ = 1/Math.cos(φ);
 
-    // Sort addresses by status (APPROVED first) and then by address
-    addresses.sort((a, b) => {
-      if (a.STATUS === 'APPROVED' && b.STATUS !== 'APPROVED') return -1;
-      if (a.STATUS !== 'APPROVED' && b.STATUS === 'APPROVED') return 1;
-      return a.ADDRESS.localeCompare(b.ADDRESS);
-    });
+        const VII = tanφ/(2*ρ*ν);
+        const VIII = tanφ/(24*ρ*Math.pow(ν,3))*(5+3*tan2φ+η2-9*tan2φ*η2);
+        const IX = tanφ/(720*ρ*Math.pow(ν,5))*(61+90*tan2φ+45*tan4φ);
+        const X = secφ/ν;
+        const XI = secφ/(6*Math.pow(ν,3))*(ν/ρ+2*tan2φ);
+        const XII = secφ/(120*Math.pow(ν,5))*(5+28*tan2φ+24*tan4φ);
+        const XIIA = secφ/(5040*Math.pow(ν,7))*(61+662*tan2φ+1320*tan4φ+720*tan6φ);
 
-    res.json({
-      results: addresses,
-      timestamp: timestamp,
-      total: addresses.length,
-      metadata: {
-        postcode: search,
-        searchType: postcodeRegex.test(search) ? 'postcode' : 'address',
-        filtered: addresses.length !== response.data.results?.length
-      }
-    });
+        const φ1 = φ - VII*Math.pow(E,2) + VIII*Math.pow(E,4) - IX*Math.pow(E,6);
+        const λ1 = λ0 + X*E - XI*Math.pow(E,3) + XII*Math.pow(E,5) - XIIA*Math.pow(E,7);
 
-  } catch (error) {
-    console.error(`[${timestamp}] OS API Error:`, {
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status
-    });
+        // Convert to degrees and validate results
+        const lat = φ1 * 180/Math.PI;
+        const lng = λ1 * 180/Math.PI;
 
-    res.status(error.response?.status || 500).json({
-      error: 'OS Places API Error',
-      message: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.response?.data : undefined
-    });
-  }
+        if (isNaN(lat) || isNaN(lng)) {
+            console.warn('Conversion produced invalid coordinates:', { lat, lng });
+            return { lat: null, lng: null };
+        }
+
+        return { lat, lng };
+    } catch (error) {
+        console.error('Error converting coordinates:', error);
+        return { lat: null, lng: null };
+    }
+}
+
+// Add the address lookup endpoint
+app.get('/api/address-lookup', async (req, res) => {
+    try {
+        const searchTerm = req.query.search;
+        
+        // Increase maxresults and add dataset parameter
+        const response = await axios.get(
+            `https://api.os.uk/search/places/v1/find`, {
+                params: {
+                    query: searchTerm,
+                    maxresults: 100,  // Increased from 20
+                    dataset: 'DPA,LPI',  // Include both Delivery Point Address and Local Property Identifier
+                    key: process.env.OS_API_KEY
+                }
+            }
+        );
+
+        // Log the raw response for debugging
+        console.log('OS Places API response:', {
+            total: response.data.results?.length,
+            header: response.data.header
+        });
+
+        const transformedResults = response.data.results
+            .filter(result => result.DPA || result.LPI) // Accept both DPA and LPI results
+            .map(result => {
+                const address = result.DPA || result.LPI;
+                return {
+                    UPRN: address.UPRN,
+                    ADDRESS: address.ADDRESS,
+                    POST_TOWN: address.POST_TOWN || address.TOWN_NAME,
+                    POSTCODE: address.POSTCODE,
+                    STATUS: address.STATUS || 'APPROVED'
+                };
+            });
+
+        // Log transformed results
+        console.log('Transformed results:', {
+            total: transformedResults.length,
+            results: transformedResults.slice(0, 2) // Log first 2 for brevity
+        });
+
+        res.json({
+            results: transformedResults,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Address lookup error:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // Add this test endpoint
@@ -223,6 +254,84 @@ app.get('/api/test-os', async (req, res) => {
       }
     });
   }
+});
+
+// Constants for ITS API
+const API_BASE_URL = 'https://api.itstechnologygroup.com/api/v1';
+
+// ITS availability endpoint
+app.post('/api/its/availability', async (req, res) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ITS availability request:`, req.body);
+
+    try {
+        const response = await axios.post(
+            `${API_BASE_URL}/availability/search/create`,
+            req.body,
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.ITS_AUTH_TOKEN}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+            }
+        );
+
+        console.log(`[${timestamp}] ITS API Response:`, {
+            status: response.status,
+            data: response.data
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error(`[${timestamp}] ITS API Error:`, {
+            message: error.message,
+            response: error.response?.data,
+            status: error.response?.status
+        });
+        res.status(error.response?.status || 500).json({
+            error: 'ITS API Error',
+            message: error.message,
+            details: error.response?.data
+        });
+    }
+});
+
+// ITS polling endpoint
+app.get('/api/its/availability/:uuid', async (req, res) => {
+    const timestamp = new Date().toISOString();
+    const { uuid } = req.params;
+    console.log(`[${timestamp}] ITS availability poll:`, { uuid });
+
+    try {
+        const response = await axios.get(
+            `${API_BASE_URL}/availability/search/${uuid}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.ITS_AUTH_TOKEN}`,
+                    'Accept': 'application/json'
+                }
+            }
+        );
+
+        console.log(`[${timestamp}] ITS Poll Response:`, {
+            status: response.status,
+            data: response.data
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error(`[${timestamp}] ITS Poll Error:`, {
+            message: error.message,
+            response: error.response?.data,
+            status: error.response?.status
+        });
+        res.status(error.response?.status || 500).json({
+            error: 'ITS Poll Error',
+            message: error.message,
+            details: error.response?.data
+        });
+    }
 });
 
 // Error handling middleware with detailed logging
